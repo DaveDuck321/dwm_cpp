@@ -1821,7 +1821,7 @@ int updategeom(void) {
         for (n = 0, m = mons; m; m = m->next, n++)
             ;
         /* only consider unique geometries as separate screens */
-                unique = ecalloc<XineramaScreenInfo>(nn));
+                unique = ecalloc<XineramaScreenInfo>(nn);
                 for (i = 0, j = 0; i < nn; i++)
                     if (isuniquegeom(unique, j, &info[i]))
                         memcpy(&unique[j++], &info[i],
