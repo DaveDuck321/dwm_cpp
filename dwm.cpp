@@ -729,8 +729,8 @@ Monitor* dirtomon(int dir) {
 
 void drawbar(Monitor* m) {
     int x, w, tw = 0;
-    int boxs = drw->fonts->h / 9;
-    int boxw = drw->fonts->h / 6 + 2;
+    int boxs = drw->getFontset().h / 9;
+    int boxw = drw->getFontset().h / 6 + 2;
     unsigned int i, occ = 0, urg = 0;
     Client* c;
 
@@ -1522,8 +1522,8 @@ void setup(void) {
     drw = new Drw{dpy, screen, root, sw, sh};
     if (!drw->fontset_create(fonts, LENGTH(fonts)))
         die("no fonts could be loaded.");
-    lrpad = drw->fonts->h;
-    bh = drw->fonts->h + 2;
+    lrpad = drw->getFontset().h;
+    bh = drw->getFontset().h + 2;
     updategeom();
     /* init atoms */
     utf8string = XInternAtom(dpy, "UTF8_STRING", False);

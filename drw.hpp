@@ -11,7 +11,7 @@ struct Cur {
 
 struct Fnt {
     ~Fnt();
-    void getexts(const char* text, uint len, uint* w, uint* h);
+    void getexts(const char* text, uint len, uint* w, uint* h) const;
 
     Display* dpy;
     unsigned int h;
@@ -23,7 +23,8 @@ struct Fnt {
 enum { ColFg, ColBg, ColBorder }; /* Clr scheme index */
 typedef XftColor Clr;
 
-struct Drw {
+class Drw {
+  private:
     uint w, h;
     Display* dpy;
     int screen;
@@ -33,29 +34,35 @@ struct Drw {
     Clr* scheme;
     std::unique_ptr<Fnt> fonts;
 
+  public:
     Drw(Display* dpy, int screen, Window win, uint w, uint h);
     ~Drw();
 
     void resize(uint w, uint h);
 
     Fnt* fontset_create(const char* fonts[], size_t fontcount);
-    uint fontset_getwidth(const char* text);
+    uint fontset_getwidth(const char* text) const;
 
-    void clr_create(Clr* dest, const char* clrname);
-    Clr* scm_create(const char* clrnames[], size_t clrcount);
+    const Fnt& getFontset() const;
+    void setFontset(Fnt* set);
 
-    void setfontset(Fnt* set);
+    void clr_create(Clr* dest, const char* clrname) const;
+    Clr* scm_create(const char* clrnames[], size_t clrcount) const;
+
+    
     void setscheme(Clr* scm);
 
-    void rect(int x, int y, uint w, uint h, int filled, int invert);
+    void rect(int x, int y, uint w, uint h, int filled, int invert) const;
     int text(int x, int y, uint w, uint h, uint lpad, const char* text,
-             int invert);
+             int invert) const;
 
-    void map(Window win, int x, int y, uint w, uint h);
+    void map(Window win, int x, int y, uint w, uint h) const;
 
-    Cur* cur_create(int shape);
-    void cur_free(Cur* cursor);
+    // These should move into their own class
+    Cur* cur_create(int shape) const;
+    void cur_free(Cur* cursor) const;
 
   private:
-    std::unique_ptr<Fnt> xfont_create(const char* fontname, FcPattern* fontpattern);
+    std::unique_ptr<Fnt> xfont_create(const char* fontname,
+                                      FcPattern* fontpattern) const;
 };

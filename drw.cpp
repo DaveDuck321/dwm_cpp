@@ -64,7 +64,7 @@ Fnt::~Fnt() {
     XftFontClose(dpy, xfont);
 }
 
-void Fnt::getexts(const char* text, uint len, uint* w, uint* h) {
+void Fnt::getexts(const char* text, uint len, uint* w, uint* h) const {
     if (!text)
         return;
 
@@ -106,7 +106,8 @@ Fnt* Drw::fontset_create(const char* fonts[], size_t fontcount) {
 
     // TODO: fix this insane pointer logic... Why not just use a vector?
     for (size_t i = 1; i <= fontcount; i++) {
-        if (auto currentFont = xfont_create(fonts[fontcount - i], nullptr); currentFont) {
+        if (auto currentFont = xfont_create(fonts[fontcount - i], nullptr);
+            currentFont) {
             currentFont->next.swap(this->fonts);
             this->fonts.swap(currentFont);
         }
@@ -114,20 +115,19 @@ Fnt* Drw::fontset_create(const char* fonts[], size_t fontcount) {
     return this->fonts.get();
 }
 
-void Drw::clr_create(XftColor* dest, const char* clrname) {
+void Drw::clr_create(XftColor* dest, const char* clrname) const {
     if (!dest || !clrname)
         return;
 
     if (!XftColorAllocName(dpy, DefaultVisual(dpy, screen),
-                           DefaultColormap(dpy, screen), clrname,
-                           dest)) {
+                           DefaultColormap(dpy, screen), clrname, dest)) {
         die("error, cannot allocate color '%s'", clrname);
     }
 }
 
 /* Wrapper to create color schemes. The caller has to call free(3) on the
  * returned color scheme when done using it. */
-XftColor* Drw::scm_create(const char* clrnames[], size_t clrcount) {
+XftColor* Drw::scm_create(const char* clrnames[], size_t clrcount) const {
     XftColor* ret;
     /* need at least two colors for a scheme */
     if (!clrnames || clrcount < 2 || !(ret = ecalloc<XftColor>(clrcount)))
@@ -139,11 +139,12 @@ XftColor* Drw::scm_create(const char* clrnames[], size_t clrcount) {
     return ret;
 }
 
-void Drw::setfontset(Fnt* set) { fonts.reset(set); }
+const Fnt& Drw::getFontset() const { return *fonts; }
+void Drw::setFontset(Fnt* set) { fonts.reset(set); }
 
 void Drw::setscheme(XftColor* scm) { scheme = scm; }
 
-void Drw::rect(int x, int y, uint w, uint h, int filled, int invert) {
+void Drw::rect(int x, int y, uint w, uint h, int filled, int invert) const {
     if (!scheme)
         return;
 
@@ -156,11 +157,11 @@ void Drw::rect(int x, int y, uint w, uint h, int filled, int invert) {
 }
 
 int Drw::text(int x, int y, uint w, uint h, uint lpad, const char* text,
-              int invert) {
+              int invert) const {
 
     char buf[1024];
     int ty;
-    unsigned int ew;
+    uint ew;
     XftDraw* d = nullptr;
     Fnt *usedfont, *curfont, *nextfont;
     size_t i, len;
@@ -173,17 +174,15 @@ int Drw::text(int x, int y, uint w, uint h, uint lpad, const char* text,
     XftResult result;
     int charexists = 0;
 
-    if ( (render && !scheme) || !text || !fonts)
+    if ((render && !scheme) || !text || !fonts)
         return 0;
 
     if (!render) {
         w = ~w;
     } else {
-        XSetForeground(dpy, gc,
-                       scheme[invert ? ColFg : ColBg].pixel);
+        XSetForeground(dpy, gc, scheme[invert ? ColFg : ColBg].pixel);
         XFillRectangle(dpy, drawable, gc, x, y, w, h);
-        d = XftDrawCreate(dpy, drawable,
-                          DefaultVisual(dpy, screen),
+        d = XftDrawCreate(dpy, drawable, DefaultVisual(dpy, screen),
                           DefaultColormap(dpy, screen));
         x += lpad;
         w -= lpad;
@@ -196,10 +195,10 @@ int Drw::text(int x, int y, uint w, uint h, uint lpad, const char* text,
         nextfont = nullptr;
         while (*text) {
             utf8charlen = utf8decode(text, &utf8codepoint, UTF_SIZ);
-            for (curfont = fonts.get(); curfont; curfont = curfont->next.get()) {
-                charexists =
-                    charexists ||
-                    XftCharExists(dpy, curfont->xfont, utf8codepoint);
+            for (curfont = fonts.get(); curfont;
+                 curfont = curfont->next.get()) {
+                charexists = charexists ||
+                             XftCharExists(dpy, curfont->xfont, utf8codepoint);
                 if (charexists) {
                     if (curfont == usedfont) {
                         utf8strlen += utf8charlen;
@@ -256,7 +255,8 @@ int Drw::text(int x, int y, uint w, uint h, uint lpad, const char* text,
 
             if (!fonts->pattern) {
                 /* Refer to the comment in xfont_create for more information. */
-                die("the first font in the cache must be loaded from a font string.");
+                die("the first font in the cache must be loaded from a font "
+                    "string.");
             }
 
             fcpattern = FcPatternDuplicate(fonts->pattern);
@@ -294,18 +294,18 @@ int Drw::text(int x, int y, uint w, uint h, uint lpad, const char* text,
     return x + (render ? w : 0);
 }
 
-void Drw::map(Window win, int x, int y, uint w, uint h) {
+void Drw::map(Window win, int x, int y, uint w, uint h) const {
     XCopyArea(dpy, drawable, win, gc, x, y, w, h, x, y);
     XSync(dpy, False);
 }
 
-uint Drw::fontset_getwidth(const char* text_to_draw) {
+uint Drw::fontset_getwidth(const char* text_to_draw) const {
     if (!fonts || !text_to_draw)
         return 0;
     return text(0, 0, 0, 0, 0, text_to_draw, 0);
 }
 
-Cur* Drw::cur_create(int shape) {
+Cur* Drw::cur_create(int shape) const {
     Cur* cur;
     if (!(cur = ecalloc<Cur>(1)))
         return nullptr;
@@ -315,7 +315,7 @@ Cur* Drw::cur_create(int shape) {
     return cur;
 }
 
-void Drw::cur_free(Cur* cursor) {
+void Drw::cur_free(Cur* cursor) const {
     if (!cursor)
         return;
 
@@ -324,7 +324,8 @@ void Drw::cur_free(Cur* cursor) {
 }
 
 /* Library users should use drw_fontset_create instead. */
-std::unique_ptr<Fnt> Drw::xfont_create(const char* fontname, FcPattern* fontpattern) {
+std::unique_ptr<Fnt> Drw::xfont_create(const char* fontname,
+                                       FcPattern* fontpattern) const {
     XftFont* xfont = nullptr;
     FcPattern* pattern = nullptr;
 
