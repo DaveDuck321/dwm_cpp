@@ -1,3 +1,11 @@
+# dwm c++
+
+dwm is the 'suckless' window manager written in C99... Unfortunately C99 sucks.
+
+Lets fix our favourite window manager with modern C++ (ignoring suckless.org).
+
+
+
 dwm - dynamic window manager
 ============================
 dwm is an extremely fast, small, and dynamic window manager for X.
