@@ -5,8 +5,8 @@
 #include <X11/Xlib.h>
 #include <X11/Xft/Xft.h>
 
-#include "drw.h"
-#include "util.h"
+#include "drw.hpp"
+#include "util.hpp"
 
 #define UTF_INVALID 0xFFFD
 #define UTF_SIZ     4
@@ -63,7 +63,7 @@ utf8decode(const char *c, long *u, size_t clen)
 Drw *
 drw_create(Display *dpy, int screen, Window root, unsigned int w, unsigned int h)
 {
-	Drw *drw = ecalloc(1, sizeof(Drw));
+	Drw *drw = ecalloc<Drw>(1);
 
 	drw->dpy = dpy;
 	drw->screen = screen;
@@ -146,7 +146,7 @@ xfont_create(Drw *drw, const char *fontname, FcPattern *fontpattern)
 		return NULL;
 	}
 
-	font = ecalloc(1, sizeof(Fnt));
+	font = ecalloc<Fnt>(1);
 	font->xfont = xfont;
 	font->pattern = pattern;
 	font->h = xfont->ascent + xfont->descent;
@@ -214,7 +214,7 @@ drw_scm_create(Drw *drw, const char *clrnames[], size_t clrcount)
 	Clr *ret;
 
 	/* need at least two colors for a scheme */
-	if (!drw || !clrnames || clrcount < 2 || !(ret = ecalloc(clrcount, sizeof(XftColor))))
+	if (!drw || !clrnames || clrcount < 2 || !(ret = ecalloc<Clr>(clrcount)))
 		return NULL;
 
 	for (i = 0; i < clrcount; i++)
@@ -257,7 +257,7 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 	XftDraw *d = NULL;
 	Fnt *usedfont, *curfont, *nextfont;
 	size_t i, len;
-	int utf8strlen, utf8charlen, render = x || y || w || h;
+	int utf8charlen, render = x || y || w || h;
 	long utf8codepoint = 0;
 	const char *utf8str;
 	FcCharSet *fccharset;
@@ -283,7 +283,7 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 
 	usedfont = drw->fonts;
 	while (1) {
-		utf8strlen = 0;
+		size_t utf8strlen = 0;
 		utf8str = text;
 		nextfont = NULL;
 		while (*text) {
@@ -417,7 +417,7 @@ drw_cur_create(Drw *drw, int shape)
 {
 	Cur *cur;
 
-	if (!drw || !(cur = ecalloc(1, sizeof(Cur))))
+	if (!drw || !(cur = ecalloc<Cur>(1)))
 		return NULL;
 
 	cur->cursor = XCreateFontCursor(drw->dpy, shape);

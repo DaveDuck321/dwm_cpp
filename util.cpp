@@ -4,17 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "util.h"
-
-void *
-ecalloc(size_t nmemb, size_t size)
-{
-	void *p;
-
-	if (!(p = calloc(nmemb, size)))
-		die("calloc:");
-	return p;
-}
+#include "util.hpp"
 
 void
 die(const char *fmt, ...) {

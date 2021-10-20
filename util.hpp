@@ -5,4 +5,15 @@
 #define BETWEEN(X, A, B)        ((A) <= (X) && (X) <= (B))
 
 void die(const char *fmt, ...);
-void *ecalloc(size_t nmemb, size_t size);
+
+
+template <typename T>
+T* ecalloc(size_t nmemb)
+{
+	if (auto pointer = static_cast<T*>( calloc(nmemb, sizeof(T))); pointer) {
+		return pointer;
+	}
+
+	die("calloc:");
+    return nullptr;
+}
