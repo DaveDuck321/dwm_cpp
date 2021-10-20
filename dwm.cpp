@@ -20,6 +20,10 @@
  *
  * To understand everything else, start reading main().
  */
+
+#include "drw.hpp"
+#include "util.hpp"
+
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xproto.h>
@@ -41,8 +45,7 @@
 #endif /* XINERAMA */
 #include <X11/Xft/Xft.h>
 
-#include "drw.hpp"
-#include "util.hpp"
+#include <memory>
 
 /* macros */
 #define BUTTONMASK (ButtonPressMask | ButtonReleaseMask)
@@ -59,7 +62,7 @@
 #define WIDTH(X) ((X)->w + 2 * (X)->bw)
 #define HEIGHT(X) ((X)->h + 2 * (X)->bw)
 #define TAGMASK ((1 << LENGTH(tags)) - 1)
-#define TEXTW(X) (drw_fontset_getwidth(drw, (X)) + lrpad)
+#define TEXTW(X) (drw->fontset_getwidth((X)) + lrpad)
 
 /* enums */
 enum { CurNormal, CurResize, CurMove, CurLast }; /* cursor */
@@ -524,11 +527,11 @@ void cleanup(void) {
     while (mons)
         cleanupmon(mons);
     for (i = 0; i < CurLast; i++)
-        drw_cur_free(drw, cursor[i]);
+        drw->cur_free(cursor[i]);
     for (i = 0; i < LENGTH(colors); i++)
         free(scheme[i]);
     XDestroyWindow(dpy, wmcheckwin);
-    drw_free(drw);
+    delete drw;  // TODO: this should be a unique pointer
     XSync(dpy, False);
     XSetInputFocus(dpy, PointerRoot, RevertToPointerRoot, CurrentTime);
     XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
@@ -599,7 +602,7 @@ void configurenotify(XEvent* e) {
         sw = ev->width;
         sh = ev->height;
         if (updategeom() || dirty) {
-            drw_resize(drw, sw, bh);
+            drw->resize(sw, bh);
             updatebars();
             for (m = mons; m; m = m->next) {
                 for (c = m->clients; c; c = c->next)
@@ -733,9 +736,9 @@ void drawbar(Monitor* m) {
 
     /* draw status first so it can be overdrawn by tags later */
     if (m == selmon) { /* status is only drawn on selected monitor */
-        drw_setscheme(drw, scheme[SchemeNorm]);
+        drw->setscheme(scheme[SchemeNorm]);
         tw = TEXTW(stext) - lrpad + 2; /* 2px right padding */
-        drw_text(drw, m->ww - tw, 0, tw, bh, 0, stext, 0);
+        drw->text(m->ww - tw, 0, tw, bh, 0, stext, 0);
     }
 
     for (c = m->clients; c; c = c->next) {
@@ -746,32 +749,31 @@ void drawbar(Monitor* m) {
     x = 0;
     for (i = 0; i < LENGTH(tags); i++) {
         w = TEXTW(tags[i]);
-        drw_setscheme(
-            drw,
+        drw->setscheme(
             scheme[m->tagset[m->seltags] & 1 << i ? SchemeSel : SchemeNorm]);
-        drw_text(drw, x, 0, w, bh, lrpad / 2, tags[i], urg & 1 << i);
+        drw->text(x, 0, w, bh, lrpad / 2, tags[i], urg & 1 << i);
         if (occ & 1 << i)
-            drw_rect(drw, x + boxs, boxs, boxw, boxw,
+            drw->rect(x + boxs, boxs, boxw, boxw,
                      m == selmon && selmon->sel && selmon->sel->tags & 1 << i,
                      urg & 1 << i);
         x += w;
     }
     w = blw = TEXTW(m->ltsymbol);
-    drw_setscheme(drw, scheme[SchemeNorm]);
-    x = drw_text(drw, x, 0, w, bh, lrpad / 2, m->ltsymbol, 0);
+    drw->setscheme(scheme[SchemeNorm]);
+    x = drw->text(x, 0, w, bh, lrpad / 2, m->ltsymbol, 0);
 
     if ((w = m->ww - tw - x) > bh) {
         if (m->sel) {
-            drw_setscheme(drw, scheme[m == selmon ? SchemeSel : SchemeNorm]);
-            drw_text(drw, x, 0, w, bh, lrpad / 2, m->sel->name, 0);
+            drw->setscheme(scheme[m == selmon ? SchemeSel : SchemeNorm]);
+            drw->text(x, 0, w, bh, lrpad / 2, m->sel->name, 0);
             if (m->sel->isfloating)
-                drw_rect(drw, x + boxs, boxs, boxw, boxw, m->sel->isfixed, 0);
+                drw->rect(x + boxs, boxs, boxw, boxw, m->sel->isfixed, 0);
         } else {
-            drw_setscheme(drw, scheme[SchemeNorm]);
-            drw_rect(drw, x, 0, w, bh, 1, 1);
+            drw->setscheme(scheme[SchemeNorm]);
+            drw->rect(x, 0, w, bh, 1, 1);
         }
     }
-    drw_map(drw, m->barwin, 0, 0, m->ww, bh);
+    drw->map(m->barwin, 0, 0, m->ww, bh);
 }
 
 void drawbars(void) {
@@ -854,7 +856,7 @@ void focusmon(const Arg* arg) {
 void focusstack(const Arg* arg) {
     Client *c = NULL, *i;
 
-    if (!selmon->sel || (selmon->sel->isfullscreen && lockfullscreen))
+    if (!selmon->sel || (selmon->sel->isfullscreen & lockfullscreen))
         return;
     if (arg->i > 0) {
         for (c = selmon->sel->next; c && !ISVISIBLE(c); c = c->next)
@@ -1517,8 +1519,8 @@ void setup(void) {
     sw = DisplayWidth(dpy, screen);
     sh = DisplayHeight(dpy, screen);
     root = RootWindow(dpy, screen);
-    drw = drw_create(dpy, screen, root, sw, sh);
-    if (!drw_fontset_create(drw, fonts, LENGTH(fonts)))
+    drw = new Drw{dpy, screen, root, sw, sh};
+    if (!drw->fontset_create(fonts, LENGTH(fonts)))
         die("no fonts could be loaded.");
     lrpad = drw->fonts->h;
     bh = drw->fonts->h + 2;
@@ -1541,13 +1543,13 @@ void setup(void) {
         XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DIALOG", False);
     netatom[NetClientList] = XInternAtom(dpy, "_NET_CLIENT_LIST", False);
     /* init cursors */
-    cursor[CurNormal] = drw_cur_create(drw, XC_left_ptr);
-    cursor[CurResize] = drw_cur_create(drw, XC_sizing);
-    cursor[CurMove] = drw_cur_create(drw, XC_fleur);
+    cursor[CurNormal] = drw->cur_create(XC_left_ptr);
+    cursor[CurResize] = drw->cur_create(XC_sizing);
+    cursor[CurMove] = drw->cur_create(XC_fleur);
     /* init appearance */
     scheme = ecalloc<Clr*>(LENGTH(colors));
     for (size_t i = 0; i < LENGTH(colors); i++)
-        scheme[i] = drw_scm_create(drw, colors[i], 3);
+        scheme[i] = drw->scm_create(colors[i], 3);
     /* init bars */
     updatebars();
     updatestatus();

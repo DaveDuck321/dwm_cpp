@@ -1,62 +1,61 @@
 /* See LICENSE file for copyright and license details. */
 
-typedef struct {
-    Cursor cursor;
-} Cur;
+#include <X11/Xft/Xft.h>
+#include <X11/Xlib.h>
 
-typedef struct Fnt {
+#include <memory>
+
+struct Cur {
+    Cursor cursor;
+};
+
+struct Fnt {
+    ~Fnt();
+    void getexts(const char* text, uint len, uint* w, uint* h);
+
     Display* dpy;
     unsigned int h;
     XftFont* xfont;
     FcPattern* pattern;
-    struct Fnt* next;
-} Fnt;
+    std::unique_ptr<Fnt> next;
+};
 
 enum { ColFg, ColBg, ColBorder }; /* Clr scheme index */
 typedef XftColor Clr;
 
-typedef struct {
-    unsigned int w, h;
+struct Drw {
+    uint w, h;
     Display* dpy;
     int screen;
     Window root;
     Drawable drawable;
     GC gc;
     Clr* scheme;
-    Fnt* fonts;
-} Drw;
+    std::unique_ptr<Fnt> fonts;
 
-/* Drawable abstraction */
-Drw* drw_create(Display* dpy, int screen, Window win, unsigned int w,
-                unsigned int h);
-void drw_resize(Drw* drw, unsigned int w, unsigned int h);
-void drw_free(Drw* drw);
+    Drw(Display* dpy, int screen, Window win, uint w, uint h);
+    ~Drw();
 
-/* Fnt abstraction */
-Fnt* drw_fontset_create(Drw* drw, const char* fonts[], size_t fontcount);
-void drw_fontset_free(Fnt* set);
-unsigned int drw_fontset_getwidth(Drw* drw, const char* text);
-void drw_font_getexts(Fnt* font, const char* text, unsigned int len,
-                      unsigned int* w, unsigned int* h);
+    void resize(uint w, uint h);
 
-/* Colorscheme abstraction */
-void drw_clr_create(Drw* drw, Clr* dest, const char* clrname);
-Clr* drw_scm_create(Drw* drw, const char* clrnames[], size_t clrcount);
+    Fnt* fontset_create(const char* fonts[], size_t fontcount);
+    uint fontset_getwidth(const char* text);
 
-/* Cursor abstraction */
-Cur* drw_cur_create(Drw* drw, int shape);
-void drw_cur_free(Drw* drw, Cur* cursor);
+    void clr_create(Clr* dest, const char* clrname);
+    Clr* scm_create(const char* clrnames[], size_t clrcount);
 
-/* Drawing context manipulation */
-void drw_setfontset(Drw* drw, Fnt* set);
-void drw_setscheme(Drw* drw, Clr* scm);
+    void setfontset(Fnt* set);
+    void setscheme(Clr* scm);
 
-/* Drawing functions */
-void drw_rect(Drw* drw, int x, int y, unsigned int w, unsigned int h,
-              int filled, int invert);
-int drw_text(Drw* drw, int x, int y, unsigned int w, unsigned int h,
-             unsigned int lpad, const char* text, int invert);
+    void rect(int x, int y, uint w, uint h, int filled, int invert);
+    int text(int x, int y, uint w, uint h, uint lpad, const char* text,
+             int invert);
 
-/* Map functions */
-void drw_map(Drw* drw, Window win, int x, int y, unsigned int w,
-             unsigned int h);
+    void map(Window win, int x, int y, uint w, uint h);
+
+    Cur* cur_create(int shape);
+    void cur_free(Cur* cursor);
+
+  private:
+    std::unique_ptr<Fnt> xfont_create(const char* fontname, FcPattern* fontpattern);
+};
