@@ -267,7 +267,7 @@ static void zoom(const Arg* arg);
 
 /* variables */
 // WORKAROUND: XClassHint expects a char*
-static char dwmClassHint[] = {'d', 'w', 'm'};
+static char dwmClassHint[] = {'d', 'w', 'm', '\0'};
 static const char broken[] = "broken";
 static char stext[256];
 static int screen;
@@ -531,7 +531,7 @@ void cleanup(void) {
     for (i = 0; i < LENGTH(colors); i++)
         free(scheme[i]);
     XDestroyWindow(dpy, wmcheckwin);
-    delete drw;  // TODO: this should be a unique pointer
+    delete drw; // TODO: this should be a unique pointer
     XSync(dpy, False);
     XSetInputFocus(dpy, PointerRoot, RevertToPointerRoot, CurrentTime);
     XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
@@ -729,8 +729,8 @@ Monitor* dirtomon(int dir) {
 
 void drawbar(Monitor* m) {
     int x, w, tw = 0;
-    int boxs = drw->getFontset().h / 9;
-    int boxw = drw->getFontset().h / 6 + 2;
+    int boxs = drw->getPrimaryFontHeight() / 9;
+    int boxw = drw->getPrimaryFontHeight() / 6 + 2;
     unsigned int i, occ = 0, urg = 0;
     Client* c;
 
@@ -754,8 +754,8 @@ void drawbar(Monitor* m) {
         drw->text(x, 0, w, bh, lrpad / 2, tags[i], urg & 1 << i);
         if (occ & 1 << i)
             drw->rect(x + boxs, boxs, boxw, boxw,
-                     m == selmon && selmon->sel && selmon->sel->tags & 1 << i,
-                     urg & 1 << i);
+                      m == selmon && selmon->sel && selmon->sel->tags & 1 << i,
+                      urg & 1 << i);
         x += w;
     }
     w = blw = TEXTW(m->ltsymbol);
@@ -1520,10 +1520,11 @@ void setup(void) {
     sh = DisplayHeight(dpy, screen);
     root = RootWindow(dpy, screen);
     drw = new Drw{dpy, screen, root, sw, sh};
-    if (!drw->fontset_create(fonts, LENGTH(fonts)))
+    if (drw->createFontSet(fonts).empty()) {
         die("no fonts could be loaded.");
-    lrpad = drw->getFontset().h;
-    bh = drw->getFontset().h + 2;
+    }
+    lrpad = drw->getPrimaryFontHeight();
+    bh = drw->getPrimaryFontHeight() + 2;
     updategeom();
     /* init atoms */
     utf8string = XInternAtom(dpy, "UTF8_STRING", False);
@@ -1823,53 +1824,51 @@ int updategeom(void) {
         for (n = 0, m = mons; m; m = m->next, n++)
             ;
         /* only consider unique geometries as separate screens */
-                unique = ecalloc<XineramaScreenInfo>(nn);
-                for (i = 0, j = 0; i < nn; i++)
-                    if (isuniquegeom(unique, j, &info[i]))
-                        memcpy(&unique[j++], &info[i],
-                               sizeof(XineramaScreenInfo));
-                XFree(info);
-                nn = j;
-                if (n <= nn) { /* new monitors available */
-                    for (i = 0; i < (nn - n); i++) {
-                        for (m = mons; m && m->next; m = m->next)
-                            ;
-                        if (m)
-                            m->next = createmon();
-                        else
-                            mons = createmon();
-                    }
-                    for (i = 0, m = mons; i < nn && m; m = m->next, i++)
-                        if (i >= n || unique[i].x_org != m->mx ||
-                            unique[i].y_org != m->my ||
-                            unique[i].width != m->mw ||
-                            unique[i].height != m->mh) {
-                            dirty = 1;
-                            m->num = i;
-                            m->mx = m->wx = unique[i].x_org;
-                            m->my = m->wy = unique[i].y_org;
-                            m->mw = m->ww = unique[i].width;
-                            m->mh = m->wh = unique[i].height;
-                            updatebarpos(m);
-                        }
-                } else { /* less monitors available nn < n */
-                    for (i = nn; i < n; i++) {
-                        for (m = mons; m && m->next; m = m->next)
-                            ;
-                        while ((c = m->clients)) {
-                            dirty = 1;
-                            m->clients = c->next;
-                            detachstack(c);
-                            c->mon = mons;
-                            attach(c);
-                            attachstack(c);
-                        }
-                        if (m == selmon)
-                            selmon = mons;
-                        cleanupmon(m);
-                    }
+        unique = ecalloc<XineramaScreenInfo>(nn);
+        for (i = 0, j = 0; i < nn; i++)
+            if (isuniquegeom(unique, j, &info[i]))
+                memcpy(&unique[j++], &info[i], sizeof(XineramaScreenInfo));
+        XFree(info);
+        nn = j;
+        if (n <= nn) { /* new monitors available */
+            for (i = 0; i < (nn - n); i++) {
+                for (m = mons; m && m->next; m = m->next)
+                    ;
+                if (m)
+                    m->next = createmon();
+                else
+                    mons = createmon();
+            }
+            for (i = 0, m = mons; i < nn && m; m = m->next, i++)
+                if (i >= n || unique[i].x_org != m->mx ||
+                    unique[i].y_org != m->my || unique[i].width != m->mw ||
+                    unique[i].height != m->mh) {
+                    dirty = 1;
+                    m->num = i;
+                    m->mx = m->wx = unique[i].x_org;
+                    m->my = m->wy = unique[i].y_org;
+                    m->mw = m->ww = unique[i].width;
+                    m->mh = m->wh = unique[i].height;
+                    updatebarpos(m);
                 }
-                free(unique);
+        } else { /* less monitors available nn < n */
+            for (i = nn; i < n; i++) {
+                for (m = mons; m && m->next; m = m->next)
+                    ;
+                while ((c = m->clients)) {
+                    dirty = 1;
+                    m->clients = c->next;
+                    detachstack(c);
+                    c->mon = mons;
+                    attach(c);
+                    attachstack(c);
+                }
+                if (m == selmon)
+                    selmon = mons;
+                cleanupmon(m);
+            }
+        }
+        free(unique);
     } else
 #endif /* XINERAMA */
     {  /* default monitor setup */

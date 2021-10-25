@@ -4,9 +4,11 @@
 
 #include <X11/Xft/Xft.h>
 #include <X11/Xlib.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+
+#include <cstdio>
+#include <string_view>
+#include <string>
+#include <vector>
 
 #define UTF_INVALID 0xFFFD
 #define UTF_SIZ 4
@@ -56,71 +58,210 @@ size_t utf8decode(const char* c, long* u, size_t clen) {
     return len;
 }
 
+const DisplayFont*
+getFirstFontWithSymbol(const std::vector<DisplayFont>& fFonts,
+                       const long utf8Codepoint) {
+    for (const auto& font : fFonts) {
+        if (font.doesCodepointExistInFont(utf8Codepoint)) {
+            return &font;
+        }
+    }
+    return nullptr;
+}
+
+std::string_view
+getContiguousCharactersWithRenderer(const DisplayFont* renderingFont,
+                                    const std::vector<DisplayFont>& fonts,
+                                    const std::string_view text) {
+
+    long utf8Codepoint;
+    size_t utf8StringLength = 0;
+
+    while (utf8StringLength < text.size()) {
+
+        const auto utf8CharLength = utf8decode(
+            text.substr(utf8StringLength).data(), &utf8Codepoint, UTF_SIZ);
+
+        if (renderingFont != getFirstFontWithSymbol(fonts, utf8Codepoint)) {
+            break;
+        }
+
+        utf8StringLength += utf8CharLength;
+    }
+
+    return text.substr(0, utf8StringLength);
+}
+
+std::string_view cropTextToExtent(const DisplayFont& renderingFont,
+                                  const std::string_view text,
+                                  const size_t targetExtent) {
+    // TODO: I think this is a bug, I've copied the behaviour from the original
+    // dwm for now what happens if the last char in 'text' is utf8 encoded?
+    for (auto view = text; !view.empty(); view.remove_suffix(1)) {
+        if (renderingFont.getTextExtent(view) <= targetExtent) {
+            return view;
+        }
+    }
+    return std::string_view{};
+}
+
 } // namespace
 
-Fnt::~Fnt() {
-    if (pattern)
-        FcPatternDestroy(pattern);
-    XftFontClose(dpy, xfont);
+void DisplayFont::dieIfFontInvalid() const {
+    // This isn't the original behaviour, should just throw to prevent Font
+    // construction In DWM they just returned a null pointer instead
+
+    /* Using the pattern found at font->xfont->pattern does not yield the
+     * same substitution results as using the pattern returned by
+     * FcNameParse; using the latter results in the desired fallback
+     * behaviour whereas the former just results in missing-character
+     * rectangles being drawn, at least with some fonts. */
+    if (!fXfont) {
+        die("cannot load font from name:");
+    }
+    if (!fPattern) {
+        die("cannot parse font pattern:");
+    }
+
+    /* Do not allow using color fonts. This is a workaround for a BadLength
+     * error from Xft with color glyphs. Modelled on the Xterm workaround. See
+     * https://bugzilla.redhat.com/show_bug.cgi?id=1498269
+     * https://lists.suckless.org/dev/1701/30932.html
+     * https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=916349
+     * and lots more all over the internet.
+     */
+    if (FcBool isColored; FcPatternGetBool(fXfont->pattern, FC_COLOR, 0,
+                                           &isColored) == FcResultMatch &&
+                          isColored) {
+        die("Color fonts are not permitted");
+    }
 }
 
-void Fnt::getexts(const char* text, uint len, uint* w, uint* h) const {
-    if (!text)
-        return;
+DisplayFont::DisplayFont(Display* display, FcPattern* pattern)
+    : fDisplay{display}, fXfont{XftFontOpenPattern(display, pattern)},
+      fPattern{pattern} {
 
-    XGlyphInfo ext;
-    XftTextExtentsUtf8(dpy, xfont, (XftChar8*)text, len, &ext);
-
-    if (w)
-        *w = ext.xOff;
-    if (h)
-        *h = this->h;
+    dieIfFontInvalid();
 }
 
-Drw::Drw(Display* dpy, int screen, Window root, uint w, uint h)
-    : w{w}, h{h}, dpy{dpy}, screen{screen}, root{root},
-      drawable{XCreatePixmap(dpy, root, w, h, DefaultDepth(dpy, screen))},
-      gc{XCreateGC(dpy, root, 0, nullptr)} {
+DisplayFont::DisplayFont(Display* display, const int screen,
+                         const char* fontname)
+    : fDisplay{display}, fXfont{XftFontOpenName(display, screen, fontname)},
+      fPattern{FcNameParse((FcChar8*)fontname)} {
 
-    XSetLineAttributes(dpy, gc, 1, LineSolid, CapButt, JoinMiter);
+    dieIfFontInvalid();
+}
+
+DisplayFont::DisplayFont(DisplayFont&& other)
+    : fDisplay{other.fDisplay}, fXfont{other.fXfont}, fPattern{other.fPattern} {
+
+    other.fPattern = nullptr;
+    other.fXfont = nullptr;
+}
+
+DisplayFont::~DisplayFont() {
+    if (fPattern) {
+        FcPatternDestroy(fPattern);
+    }
+    if (fXfont) {
+        XftFontClose(fDisplay, fXfont);
+    }
+}
+
+bool DisplayFont::doesCodepointExistInFont(long utf8Codepoint) const {
+    return XftCharExists(fDisplay, fXfont, utf8Codepoint);
+}
+
+DisplayFont
+DisplayFont::generateDerivedFontWithCodepoint(const int screen,
+                                              const long utf8Codepoint) const {
+    auto* fcCharSet = FcCharSetCreate();
+    FcCharSetAddChar(fcCharSet, utf8Codepoint);
+
+    if (!fPattern) {
+        die("the first font in the cache must be loaded from a font string.");
+    }
+
+    auto* fcPattern = FcPatternDuplicate(fPattern);
+    FcPatternAddCharSet(fcPattern, FC_CHARSET, fcCharSet);
+    FcPatternAddBool(fcPattern, FC_SCALABLE, FcTrue);
+    FcPatternAddBool(fcPattern, FC_COLOR, FcFalse);
+
+    FcConfigSubstitute(nullptr, fcPattern, FcMatchPattern);
+    FcDefaultSubstitute(fcPattern);
+
+    XftResult result;
+    auto* match = XftFontMatch(fDisplay, screen, fcPattern, &result);
+
+    FcCharSetDestroy(fcCharSet);
+    FcPatternDestroy(fcPattern);
+
+    if (!match) {
+        die("TODO: figure out what should happen here");
+    }
+
+    DisplayFont newFont{fDisplay, match};
+    if (!newFont.doesCodepointExistInFont(utf8Codepoint)) {
+        die("TODO: figure out what should happen here");
+    }
+
+    return newFont;
+}
+
+uint DisplayFont::getHeight() const { return fXfont->ascent + fXfont->descent; }
+
+XftFont* DisplayFont::getXFont() const { return fXfont; };
+
+uint DisplayFont::getTextExtent(const std::string_view text) const {
+    if (text.empty())
+        return 0;
+
+    XGlyphInfo extent;
+    XftTextExtentsUtf8(fDisplay, fXfont, (XftChar8*)text.data(), text.size(),
+                       &extent);
+
+    return extent.xOff;
+}
+
+Drw::Drw(Display* display, int screen, Window root, uint w, uint h)
+    : fWidth{w}, fHeight{h}, fDisplay{display}, fScreen{screen}, fRoot{root},
+      fDrawable{
+          XCreatePixmap(display, root, w, h, DefaultDepth(display, screen))},
+      fGC{XCreateGC(display, root, 0, nullptr)} {
+
+    XSetLineAttributes(display, fGC, 1, LineSolid, CapButt, JoinMiter);
 }
 
 Drw::~Drw() {
-    XFreePixmap(dpy, drawable);
-    XFreeGC(dpy, gc);
+    XFreePixmap(fDisplay, fDrawable);
+    XFreeGC(fDisplay, fGC);
 }
 
-void Drw::resize(uint w, uint h) {
-    this->w = w;
-    this->h = h;
+void Drw::resize(const uint w, const uint h) {
+    fWidth = w;
+    fHeight = h;
 
-    if (this->drawable) {
-        XFreePixmap(dpy, drawable);
+    if (fDrawable) {
+        XFreePixmap(fDisplay, fDrawable);
     }
-    this->drawable = XCreatePixmap(dpy, root, w, h, DefaultDepth(dpy, screen));
+    fDrawable = XCreatePixmap(fDisplay, fRoot, fWidth, fHeight,
+                              DefaultDepth(fDisplay, fScreen));
 }
 
-Fnt* Drw::fontset_create(const char* fonts[], size_t fontcount) {
-    if (!fonts)
-        return nullptr;
-
-    // TODO: fix this insane pointer logic... Why not just use a vector?
-    for (size_t i = 1; i <= fontcount; i++) {
-        if (auto currentFont = xfont_create(fonts[fontcount - i], nullptr);
-            currentFont) {
-            currentFont->next.swap(this->fonts);
-            this->fonts.swap(currentFont);
-        }
+const std::vector<DisplayFont>&
+Drw::createFontSet(const std::vector<std::string>& fontNames) {
+    for (const auto& fontName : fontNames) {
+        fFonts.emplace_back(fDisplay, fScreen, fontName.data());
     }
-    return this->fonts.get();
+    return fFonts;
 }
 
 void Drw::clr_create(XftColor* dest, const char* clrname) const {
     if (!dest || !clrname)
         return;
 
-    if (!XftColorAllocName(dpy, DefaultVisual(dpy, screen),
-                           DefaultColormap(dpy, screen), clrname, dest)) {
+    if (!XftColorAllocName(fDisplay, DefaultVisual(fDisplay, fScreen),
+                           DefaultColormap(fDisplay, fScreen), clrname, dest)) {
         die("error, cannot allocate color '%s'", clrname);
     }
 }
@@ -139,170 +280,105 @@ XftColor* Drw::scm_create(const char* clrnames[], size_t clrcount) const {
     return ret;
 }
 
-const Fnt& Drw::getFontset() const { return *fonts; }
-void Drw::setFontset(Fnt* set) { fonts.reset(set); }
+uint Drw::getPrimaryFontHeight() const { return fFonts.at(0).getHeight(); }
 
-void Drw::setscheme(XftColor* scm) { scheme = scm; }
+const std::vector<DisplayFont>& Drw::getFontset() const { return fFonts; }
+
+void Drw::setscheme(XftColor* scm) { fScheme = scm; }
 
 void Drw::rect(int x, int y, uint w, uint h, int filled, int invert) const {
-    if (!scheme)
+    if (!fScheme)
         return;
 
-    XSetForeground(dpy, gc, invert ? scheme[ColBg].pixel : scheme[ColFg].pixel);
+    XSetForeground(fDisplay, fGC,
+                   invert ? fScheme[ColBg].pixel : fScheme[ColFg].pixel);
 
-    if (filled)
-        XFillRectangle(dpy, drawable, gc, x, y, w, h);
-    else
-        XDrawRectangle(dpy, drawable, gc, x, y, w - 1, h - 1);
+    if (filled) {
+        XFillRectangle(fDisplay, fDrawable, fGC, x, y, w, h);
+    } else {
+        XDrawRectangle(fDisplay, fDrawable, fGC, x, y, w - 1, h - 1);
+    }
 }
 
-int Drw::text(int x, int y, uint w, uint h, uint lpad, const char* text,
-              int invert) const {
+int Drw::text(int x, const int y, uint w, uint h, const uint lpad,
+              std::string_view text, const int invert) {
 
-    char buf[1024];
-    int ty;
-    uint ew;
-    XftDraw* d = nullptr;
-    Fnt *usedfont, *curfont, *nextfont;
-    size_t i, len;
-    int utf8charlen, render = x || y || w || h;
-    long utf8codepoint = 0;
-    const char* utf8str;
-    FcCharSet* fccharset;
-    FcPattern* fcpattern;
-    FcPattern* match;
-    XftResult result;
-    int charexists = 0;
-
-    if ((render && !scheme) || !text || !fonts)
+    bool shouldRender = x || y || w || h;
+    if ((shouldRender && !fScheme) || text.empty() || fFonts.empty()) {
         return 0;
+    }
 
-    if (!render) {
-        w = ~w;
-    } else {
-        XSetForeground(dpy, gc, scheme[invert ? ColFg : ColBg].pixel);
-        XFillRectangle(dpy, drawable, gc, x, y, w, h);
-        d = XftDrawCreate(dpy, drawable, DefaultVisual(dpy, screen),
-                          DefaultColormap(dpy, screen));
+    XftDraw* xftDrawer = nullptr;
+    if (shouldRender) {
+        XSetForeground(fDisplay, fGC, fScheme[invert ? ColFg : ColBg].pixel);
+        XFillRectangle(fDisplay, fDrawable, fGC, x, y, w, h);
+        xftDrawer =
+            XftDrawCreate(fDisplay, fDrawable, DefaultVisual(fDisplay, fScreen),
+                          DefaultColormap(fDisplay, fScreen));
         x += lpad;
         w -= lpad;
+    } else {
+        w = ~w;
     }
 
-    usedfont = fonts.get();
-    while (1) {
-        size_t utf8strlen = 0;
-        utf8str = text;
-        nextfont = nullptr;
-        while (*text) {
-            utf8charlen = utf8decode(text, &utf8codepoint, UTF_SIZ);
-            for (curfont = fonts.get(); curfont;
-                 curfont = curfont->next.get()) {
-                charexists = charexists ||
-                             XftCharExists(dpy, curfont->xfont, utf8codepoint);
-                if (charexists) {
-                    if (curfont == usedfont) {
-                        utf8strlen += utf8charlen;
-                        text += utf8charlen;
-                    } else {
-                        nextfont = curfont;
-                    }
-                    break;
-                }
-            }
+    while (!text.empty()) {
+        long utf8Codepoint;
+        utf8decode(text.data(), &utf8Codepoint, UTF_SIZ);
 
-            if (!charexists || nextfont)
-                break;
-            else
-                charexists = 0;
+        const auto* renderingFont =
+            getFirstFontWithSymbol(fFonts, utf8Codepoint);
+
+        if (!renderingFont) {
+            // Make a new font to render this character
+            // NOTE: pointer into vector: don't mutate fFonts past this point
+            renderingFont =
+                &fFonts.emplace_back(fFonts[0].generateDerivedFontWithCodepoint(
+                    fScreen, utf8Codepoint));
         }
 
-        if (utf8strlen) {
-            usedfont->getexts(utf8str, utf8strlen, &ew, nullptr);
-            /* shorten text if necessary */
-            for (len = MIN(utf8strlen, sizeof(buf) - 1); len && ew > w; len--)
-                usedfont->getexts(utf8str, len, &ew, nullptr);
+        const auto textToRender =
+            getContiguousCharactersWithRenderer(renderingFont, fFonts, text);
+        text.remove_prefix(textToRender.size());
 
-            if (len) {
-                memcpy(buf, utf8str, len);
-                buf[len] = '\0';
-                if (len < utf8strlen)
-                    for (i = len; i && i > len - 3; buf[--i] = '.')
-                        ; /* NOP */
+        const auto croppedTextToRender =
+            cropTextToExtent(*renderingFont, textToRender, w);
 
-                if (render) {
-                    ty = y + (h - usedfont->h) / 2 + usedfont->xfont->ascent;
-                    XftDrawStringUtf8(d, &scheme[invert ? ColBg : ColFg],
-                                      usedfont->xfont, x, ty, (XftChar8*)buf,
-                                      len);
-                }
-                x += ew;
-                w -= ew;
-            }
-        }
+        if (!croppedTextToRender.empty()) {
+            // TODO: render elipsis here if textToRender != croppedTextToRender
 
-        if (!*text) {
-            break;
-        } else if (nextfont) {
-            charexists = 0;
-            usedfont = nextfont;
-        } else {
-            /* Regardless of whether or not a fallback font is found, the
-             * character must be drawn. */
-            charexists = 1;
-
-            fccharset = FcCharSetCreate();
-            FcCharSetAddChar(fccharset, utf8codepoint);
-
-            if (!fonts->pattern) {
-                /* Refer to the comment in xfont_create for more information. */
-                die("the first font in the cache must be loaded from a font "
-                    "string.");
+            if (shouldRender) {
+                const auto ty = y + (h - renderingFont->getHeight()) / 2 +
+                                renderingFont->getXFont()->ascent;
+                XftDrawStringUtf8(xftDrawer, &fScheme[invert ? ColBg : ColFg],
+                                  renderingFont->getXFont(), x, ty,
+                                  (XftChar8*)croppedTextToRender.data(),
+                                  croppedTextToRender.size());
             }
 
-            fcpattern = FcPatternDuplicate(fonts->pattern);
-            FcPatternAddCharSet(fcpattern, FC_CHARSET, fccharset);
-            FcPatternAddBool(fcpattern, FC_SCALABLE, FcTrue);
-            FcPatternAddBool(fcpattern, FC_COLOR, FcFalse);
-
-            FcConfigSubstitute(nullptr, fcpattern, FcMatchPattern);
-            FcDefaultSubstitute(fcpattern);
-            match = XftFontMatch(dpy, screen, fcpattern, &result);
-
-            FcCharSetDestroy(fccharset);
-            FcPatternDestroy(fcpattern);
-
-            if (match) {
-                // AHHH! Why do c programmers do this?
-                auto newly_usedfont = xfont_create(nullptr, match);
-                usedfont = newly_usedfont.get();
-
-                if (usedfont &&
-                    XftCharExists(dpy, usedfont->xfont, utf8codepoint)) {
-                    for (curfont = fonts.get(); curfont->next;
-                         curfont = curfont->next.get())
-                        ; /* NOP */
-                    curfont->next.swap(newly_usedfont);
-                } else {
-                    usedfont = fonts.get();
-                }
-            }
+            const auto finalExtent =
+                renderingFont->getTextExtent(croppedTextToRender);
+            x += finalExtent;
+            w -= finalExtent;
         }
     }
-    if (d)
-        XftDrawDestroy(d);
 
-    return x + (render ? w : 0);
+    if (xftDrawer) {
+        XftDrawDestroy(xftDrawer);
+    }
+
+    return x + (shouldRender ? w : 0);
 }
 
 void Drw::map(Window win, int x, int y, uint w, uint h) const {
-    XCopyArea(dpy, drawable, win, gc, x, y, w, h, x, y);
-    XSync(dpy, False);
+    XCopyArea(fDisplay, fDrawable, win, fGC, x, y, w, h, x, y);
+    XSync(fDisplay, False);
 }
 
-uint Drw::fontset_getwidth(const char* text_to_draw) const {
-    if (!fonts || !text_to_draw)
+uint Drw::fontset_getwidth(const char* textToDraw) {
+    if (!textToDraw) {
         return 0;
-    return text(0, 0, 0, 0, 0, text_to_draw, 0);
+    }
+    return text(0, 0, 0, 0, 0, textToDraw, 0);
 }
 
 Cur* Drw::cur_create(int shape) const {
@@ -310,7 +386,7 @@ Cur* Drw::cur_create(int shape) const {
     if (!(cur = ecalloc<Cur>(1)))
         return nullptr;
 
-    cur->cursor = XCreateFontCursor(dpy, shape);
+    cur->cursor = XCreateFontCursor(fDisplay, shape);
 
     return cur;
 }
@@ -319,61 +395,6 @@ void Drw::cur_free(Cur* cursor) const {
     if (!cursor)
         return;
 
-    XFreeCursor(dpy, cursor->cursor);
+    XFreeCursor(fDisplay, cursor->cursor);
     free(cursor);
-}
-
-/* Library users should use drw_fontset_create instead. */
-std::unique_ptr<Fnt> Drw::xfont_create(const char* fontname,
-                                       FcPattern* fontpattern) const {
-    XftFont* xfont = nullptr;
-    FcPattern* pattern = nullptr;
-
-    if (fontname) {
-        /* Using the pattern found at font->xfont->pattern does not yield the
-         * same substitution results as using the pattern returned by
-         * FcNameParse; using the latter results in the desired fallback
-         * behaviour whereas the former just results in missing-character
-         * rectangles being drawn, at least with some fonts. */
-        if (!(xfont = XftFontOpenName(dpy, screen, fontname))) {
-            fprintf(stderr, "error, cannot load font from name: '%s'\n",
-                    fontname);
-            return nullptr;
-        }
-        if (!(pattern = FcNameParse((FcChar8*)fontname))) {
-            fprintf(stderr, "error, cannot parse font name to pattern: '%s'\n",
-                    fontname);
-            XftFontClose(dpy, xfont);
-            return nullptr;
-        }
-    } else if (fontpattern) {
-        if (!(xfont = XftFontOpenPattern(dpy, fontpattern))) {
-            fprintf(stderr, "error, cannot load font from pattern.\n");
-            return nullptr;
-        }
-    } else {
-        die("no font specified.");
-    }
-
-    /* Do not allow using color fonts. This is a workaround for a BadLength
-     * error from Xft with color glyphs. Modelled on the Xterm workaround. See
-     * https://bugzilla.redhat.com/show_bug.cgi?id=1498269
-     * https://lists.suckless.org/dev/1701/30932.html
-     * https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=916349
-     * and lots more all over the internet.
-     */
-    FcBool iscol;
-    if (FcPatternGetBool(xfont->pattern, FC_COLOR, 0, &iscol) ==
-            FcResultMatch &&
-        iscol) {
-        XftFontClose(dpy, xfont);
-        return nullptr;
-    }
-
-    return std::unique_ptr<Fnt>(new Fnt{
-        .dpy = dpy,
-        .h = xfont->ascent + xfont->descent,
-        .xfont = xfont,
-        .pattern = pattern,
-    });
 }
