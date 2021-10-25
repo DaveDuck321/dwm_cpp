@@ -6,16 +6,24 @@ include config.mk
 SRC = drw.cpp dwm.cpp util.cpp
 OBJ = ${SRC:.cpp=.o}
 
-all: options dwm
+all: release
+
+debug: CXXFLAGS += ${DEBUG_CXXFLAGS}
+debug: LDFLAGS += ${DEBUG_LDFLAGS}
+debug: options dwm
+
+release: CXXFLAGS += ${RELEASE_CXXFLAGS}
+release: LDFLAGS += ${RELEASE_LDFLAGS}
+release: options dwm
 
 options:
 	@echo dwm build options:
-	@echo "CPPFLAGS   = ${CPPFLAGS}"
+	@echo "CXXFLAGS = ${CXXFLAGS}"
 	@echo "LDFLAGS  = ${LDFLAGS}"
-	@echo "CC       = ${CC}"
+	@echo "CXX      = ${CXX}"
 
 .c.o:
-	${CC} -c ${CFLAGS} $<
+	${CXX} -c ${CXXFLAGS} $<
 
 ${OBJ}: config.hpp config.mk
 
@@ -23,7 +31,7 @@ config.hpp:
 	cp config.def.hpp $@
 
 dwm: ${OBJ}
-	${CC} -o $@ ${OBJ} ${LDFLAGS}
+	${CXX} -o $@ ${OBJ} ${LDFLAGS}
 
 clean:
 	rm -f dwm ${OBJ} dwm-${VERSION}.tar.gz

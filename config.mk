@@ -20,11 +20,17 @@ FREETYPEINC = /usr/include/freetype2
 
 # includes and libs
 INCS = -I${X11INC} -I${FREETYPEINC}
-LIBS = -L${X11LIB} -lX11 ${XINERAMALIBS} ${FREETYPELIBS}
+LIBS = -lstdc++ -L${X11LIB} -lX11 ${XINERAMALIBS} ${FREETYPELIBS}
 
 # flags
-CPPFLAGS = -std=c++20 -pedantic -Wall -Wno-deprecated-declarations -g -Os ${INCS} -D_DEFAULT_SOURCE -DVERSION=\"${VERSION}\" ${XINERAMAFLAGS}
+CXXFLAGS = -std=c++20 -Wpedantic -Wall -Wextra -Wno-deprecated-declarations -Wno-unused-parameter ${INCS} -D_DEFAULT_SOURCE -DVERSION=\"${VERSION}\" ${XINERAMAFLAGS}
 LDFLAGS  = ${LIBS}
 
+DEBUG_CXXFLAGS = -fsanitize=address,undefined -g -Og
+DEBUG_LDFLAGS = -fsanitize=address,undefined
+
+RELEASE_CXXFLAGS = -O3
+RELEASE_LDFLAGS = 
+
 # compiler and linker
-CC = c++
+CXX = c++
