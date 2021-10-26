@@ -6,8 +6,8 @@
 #include <X11/Xlib.h>
 
 #include <cstdio>
-#include <string_view>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #define UTF_INVALID 0xFFFD
@@ -268,14 +268,15 @@ void Drw::clr_create(XftColor* dest, const char* clrname) const {
 
 /* Wrapper to create color schemes. The caller has to call free(3) on the
  * returned color scheme when done using it. */
-XftColor* Drw::scm_create(const char* clrnames[], size_t clrcount) const {
+XftColor* Drw::scm_create(const ColorPalette& palette) const {
     XftColor* ret;
     /* need at least two colors for a scheme */
-    if (!clrnames || clrcount < 2 || !(ret = ecalloc<XftColor>(clrcount)))
+    if (palette.size() < 2 || !(ret = ecalloc<XftColor>(palette.size()))) {
         return nullptr;
+    }
 
-    for (size_t i = 0; i < clrcount; i++) {
-        clr_create(&ret[i], clrnames[i]);
+    for (size_t i = 0; i < palette.size(); i++) {
+        clr_create(&ret[i], palette[i]);
     }
     return ret;
 }

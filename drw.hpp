@@ -36,6 +36,8 @@ class DisplayFont {
     FcPattern* fPattern;
 };
 
+using ColorPalette = std::array<const char *, 3>;
+
 enum { ColFg, ColBg, ColBorder }; /* Clr scheme index */
 typedef XftColor Clr;
 
@@ -55,7 +57,7 @@ class Drw {
     const std::vector<DisplayFont>& getFontset() const;
 
     void clr_create(Clr* dest, const char* clrname) const;
-    Clr* scm_create(const char* clrnames[], size_t clrcount) const;
+    Clr* scm_create(const ColorPalette& paletteNames) const;
 
     void setscheme(Clr* scm);
 
