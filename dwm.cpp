@@ -61,7 +61,6 @@
                      std::max((x), (m)->wx)) *                                 \
      std::max(0, std::min((y) + (h), (m)->wy + (m)->wh) -                      \
                      std::max((y), (m)->wy)))
-#define ISVISIBLE(C) ((C->tags & C->mon->tagset[C->mon->seltags]))
 #define MOUSEMASK (BUTTONMASK | PointerMotionMask)
 #define WIDTH(X) ((X)->w + 2 * (X)->bw)
 #define HEIGHT(X) ((X)->h + 2 * (X)->bw)
@@ -295,6 +294,10 @@ Display* dpy;
 Drw* drw;
 Monitor *mons, *selmon;
 Window root, wmcheckwin;
+
+bool isVisible(const Client& client) {
+    return client.tags & client.mon->tagset[client.mon->seltags];
+}
 
 /* configuration, allows nested code to access above variables */
 #include "config.hpp"
@@ -656,7 +659,7 @@ void configurerequest(XEvent* e) {
             if ((ev->value_mask & (CWX | CWY)) &&
                 !(ev->value_mask & (CWWidth | CWHeight)))
                 configure(c);
-            if (ISVISIBLE(c))
+            if (isVisible(*c))
                 XMoveResizeWindow(dpy, c->win, c->x, c->y, c->w, c->h);
         } else
             configure(c);
@@ -713,14 +716,15 @@ void detach(Client* c) {
 }
 
 void detachstack(Client* c) {
-    Client **tc, *t;
+    Client** tc;
 
     for (tc = &c->mon->stack; *tc && *tc != c; tc = &(*tc)->snext)
         ;
     *tc = c->snext;
 
     if (c == c->mon->sel) {
-        for (t = c->mon->stack; t && !ISVISIBLE(t); t = t->snext)
+        Client* t;
+        for (t = c->mon->stack; t && !isVisible(*t); t = t->snext)
             ;
         c->mon->sel = t;
     }
@@ -773,7 +777,7 @@ void drawbar(Monitor* m) {
                             urg & 1 << i);
         x += w;
     }
-    w = blw =  drw->getTextWidth(m->ltsymbol) + lrpad;
+    w = blw = drw->getTextWidth(m->ltsymbol) + lrpad;
     drw->setScheme(scheme->normal);
     x = drw->renderText(x, 0, w, bh, lrpad / 2, m->ltsymbol, 0);
 
@@ -825,8 +829,8 @@ void expose(XEvent* e) {
 }
 
 void focus(Client* c) {
-    if (!c || !ISVISIBLE(c))
-        for (c = selmon->stack; c && !ISVISIBLE(c); c = c->snext)
+    if (!c || !isVisible(*c))
+        for (c = selmon->stack; c && !isVisible(*c); c = c->snext)
             ;
     if (selmon->sel && selmon->sel != c)
         unfocus(selmon->sel, 0);
@@ -869,23 +873,24 @@ void focusmon(const Arg* arg) {
 }
 
 void focusstack(const Arg* arg) {
-    Client *c = NULL, *i;
+    Client* c = nullptr;
 
     if (!selmon->sel || (selmon->sel->isfullscreen & lockfullscreen))
         return;
     if (arg->i > 0) {
-        for (c = selmon->sel->next; c && !ISVISIBLE(c); c = c->next)
+        for (c = selmon->sel->next; c && !isVisible(*c); c = c->next)
             ;
         if (!c)
-            for (c = selmon->clients; c && !ISVISIBLE(c); c = c->next)
+            for (c = selmon->clients; c && !isVisible(*c); c = c->next)
                 ;
     } else {
+        Client* i;
         for (i = selmon->clients; i != selmon->sel; i = i->next)
-            if (ISVISIBLE(i))
+            if (isVisible(*i))
                 c = i;
         if (!c)
             for (; i; i = i->next)
-                if (ISVISIBLE(i))
+                if (isVisible(*i))
                     c = i;
     }
     if (c) {
@@ -1133,7 +1138,7 @@ void monocle(Monitor* m) {
     Client* c;
 
     for (c = m->clients; c; c = c->next)
-        if (ISVISIBLE(c))
+        if (isVisible(*c))
             n++;
     if (n > 0) /* override layout symbol */
         snprintf(m->ltsymbol, sizeof m->ltsymbol, "[%d]", n);
@@ -1171,7 +1176,8 @@ void movemouse(const Arg* arg) {
     ocx = c->x;
     ocy = c->y;
     if (XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
-                     None, cursors->moving.getXCursor(), CurrentTime) != GrabSuccess)
+                     None, cursors->moving.getXCursor(),
+                     CurrentTime) != GrabSuccess)
         return;
     if (!getrootptr(&x, &y))
         return;
@@ -1218,7 +1224,7 @@ void movemouse(const Arg* arg) {
 }
 
 Client* nexttiled(Client* c) {
-    for (; c && (c->isfloating || !ISVISIBLE(c)); c = c->next)
+    for (; c && (c->isfloating || !isVisible(*c)); c = c->next)
         ;
     return c;
 }
@@ -1378,7 +1384,7 @@ void restack(Monitor* m) {
         wc.stack_mode = Below;
         wc.sibling = m->barwin;
         for (c = m->stack; c; c = c->snext)
-            if (!c->isfloating && ISVISIBLE(c)) {
+            if (!c->isfloating && isVisible(*c)) {
                 XConfigureWindow(dpy, c->win, CWSibling | CWStackMode, &wc);
                 wc.sibling = c->win;
             }
@@ -1567,10 +1573,10 @@ void setup(void) {
         XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DIALOG", False);
     netatom[NetClientList] = XInternAtom(dpy, "_NET_CLIENT_LIST", False);
     /* init cursors */
-    cursors.emplace(CursorTheme {
-        .normal {dpy, XC_left_ptr},
-        .resizing {dpy, XC_sizing},
-        .moving {dpy, XC_fleur},
+    cursors.emplace(CursorTheme{
+        .normal = {dpy, XC_left_ptr},
+        .resizing = {dpy, XC_sizing},
+        .moving = {dpy, XC_fleur},
     });
     /* init appearance */
     scheme = drw->parseTheme(colors);
@@ -1615,7 +1621,7 @@ void seturgent(Client* c, int urg) {
 void showhide(Client* c) {
     if (!c)
         return;
-    if (ISVISIBLE(c)) {
+    if (isVisible(*c)) {
         /* show clients top down */
         XMoveWindow(dpy, c->win, c->x, c->y);
         if ((!c->mon->lt[c->mon->sellt]->arrange || c->isfloating) &&
