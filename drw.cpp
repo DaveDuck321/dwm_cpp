@@ -108,6 +108,23 @@ std::string_view cropTextToExtent(const DisplayFont& renderingFont,
 
 } // namespace
 
+CursorFont::CursorFont(Display* display, int shape)
+    : fDisplay{display}, fCursor{XCreateFontCursor(display, shape)} {}
+
+CursorFont::CursorFont(CursorFont&& other) : fDisplay{other.fDisplay} {
+    fCursor.swap(other.fCursor);
+}
+
+CursorFont::~CursorFont() {
+    if (fCursor) {
+        XFreeCursor(fDisplay, getXCursor());
+    }
+}
+
+Cursor CursorFont::getXCursor() const {
+    return *fCursor;
+}
+
 XColorScheme::XColorScheme(Display* display, const int screen,
                            const ColorScheme& scheme) {
 
@@ -383,22 +400,4 @@ int Drw::getTextWidth(const std::string_view text) {
 void Drw::map(Window win, int x, int y, uint w, uint h) const {
     XCopyArea(fDisplay, fDrawable, win, fGC, x, y, w, h, x, y);
     XSync(fDisplay, False);
-}
-
-Cur* Drw::cur_create(int shape) const {
-    Cur* cur;
-    if (!(cur = ecalloc<Cur>(1)))
-        return nullptr;
-
-    cur->cursor = XCreateFontCursor(fDisplay, shape);
-
-    return cur;
-}
-
-void Drw::cur_free(Cur* cursor) const {
-    if (!cursor)
-        return;
-
-    XFreeCursor(fDisplay, cursor->cursor);
-    free(cursor);
 }

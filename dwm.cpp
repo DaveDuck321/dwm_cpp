@@ -68,8 +68,6 @@
 #define TAGMASK ((1 << tags.size()) - 1)
 
 /* enums */
-enum { CurNormal, CurResize, CurMove, CurLast }; /* cursor */
-
 enum {
     NetSupported,
     NetWMName,
@@ -116,6 +114,12 @@ struct Button {
 
 typedef struct Monitor Monitor;
 typedef struct Client Client;
+
+struct CursorTheme {
+    CursorFont normal;
+    CursorFont resizing;
+    CursorFont moving;
+};
 
 struct Client {
     char name[256];
@@ -285,7 +289,7 @@ int (*xerrorxlib)(Display*, XErrorEvent*);
 unsigned int numlockmask = 0;
 Atom wmatom[WMLast], netatom[NetLast];
 int running = 1;
-Cur* cursor[CurLast];
+std::optional<CursorTheme> cursors;
 std::optional<Theme<XColorScheme>> scheme;
 Display* dpy;
 Drw* drw;
@@ -518,19 +522,17 @@ void checkotherwm(void) {
 void cleanup(void) {
     Arg a = {.ui = ~0u};
     Layout foo = {"", NULL};
-    Monitor* m;
-    size_t i;
 
     view(&a);
     selmon->lt[selmon->sellt] = &foo;
-    for (m = mons; m; m = m->next)
-        while (m->stack)
+    for (Monitor* m = mons; m; m = m->next) {
+        while (m->stack) {
             unmanage(m->stack, 0);
+        }
+    }
     XUngrabKey(dpy, AnyKey, AnyModifier, root);
     while (mons)
         cleanupmon(mons);
-    for (i = 0; i < CurLast; i++)
-        drw->cur_free(cursor[i]);
 
     XDestroyWindow(dpy, wmcheckwin);
     delete drw; // TODO: this should be a unique pointer
@@ -1169,7 +1171,7 @@ void movemouse(const Arg* arg) {
     ocx = c->x;
     ocy = c->y;
     if (XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
-                     None, cursor[CurMove]->cursor, CurrentTime) != GrabSuccess)
+                     None, cursors->moving.getXCursor(), CurrentTime) != GrabSuccess)
         return;
     if (!getrootptr(&x, &y))
         return;
@@ -1316,7 +1318,7 @@ void resizemouse(const Arg* arg) {
     ocx = c->x;
     ocy = c->y;
     if (XGrabPointer(dpy, root, False, MOUSEMASK, GrabModeAsync, GrabModeAsync,
-                     None, cursor[CurResize]->cursor,
+                     None, cursors->resizing.getXCursor(),
                      CurrentTime) != GrabSuccess)
         return;
     XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + c->bw - 1,
@@ -1565,9 +1567,11 @@ void setup(void) {
         XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DIALOG", False);
     netatom[NetClientList] = XInternAtom(dpy, "_NET_CLIENT_LIST", False);
     /* init cursors */
-    cursor[CurNormal] = drw->cur_create(XC_left_ptr);
-    cursor[CurResize] = drw->cur_create(XC_sizing);
-    cursor[CurMove] = drw->cur_create(XC_fleur);
+    cursors.emplace(CursorTheme {
+        .normal {dpy, XC_left_ptr},
+        .resizing {dpy, XC_sizing},
+        .moving {dpy, XC_fleur},
+    });
     /* init appearance */
     scheme = drw->parseTheme(colors);
     /* init bars */
@@ -1586,7 +1590,7 @@ void setup(void) {
                     PropModeReplace, (unsigned char*)netatom, NetLast);
     XDeleteProperty(dpy, root, netatom[NetClientList]);
     /* select events */
-    wa.cursor = cursor[CurNormal]->cursor;
+    wa.cursor = cursors->normal.getXCursor();
     wa.event_mask = SubstructureRedirectMask | SubstructureNotifyMask |
                     ButtonPressMask | PointerMotionMask | EnterWindowMask |
                     LeaveWindowMask | StructureNotifyMask | PropertyChangeMask;
@@ -1801,7 +1805,7 @@ void updatebars(void) {
             dpy, root, m->wx, m->by, m->ww, bh, 0, DefaultDepth(dpy, screen),
             CopyFromParent, DefaultVisual(dpy, screen),
             CWOverrideRedirect | CWBackPixmap | CWEventMask, &wa);
-        XDefineCursor(dpy, m->barwin, cursor[CurNormal]->cursor);
+        XDefineCursor(dpy, m->barwin, cursors->normal.getXCursor());
         XMapRaised(dpy, m->barwin);
         XSetClassHint(dpy, m->barwin, hint);
     }

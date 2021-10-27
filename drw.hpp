@@ -9,8 +9,17 @@
 #include <string_view>
 #include <vector>
 
-struct Cur {
-    Cursor cursor;
+class CursorFont {
+  public:
+    CursorFont(Display*, int shape);
+    CursorFont(CursorFont&&);
+    ~CursorFont();
+
+    Cursor getXCursor() const;
+
+  private:
+    Display* fDisplay;
+    std::optional<Cursor> fCursor;
 };
 
 struct ColorScheme {
@@ -34,8 +43,8 @@ template <typename Scheme> struct Theme {
 
 class DisplayFont {
   public:
-    DisplayFont(Display* display, int screen, const char* fontName);
-    DisplayFont(Display* display, FcPattern* pattern);
+    DisplayFont(Display*, int screen, const char* fontName);
+    DisplayFont(Display*, FcPattern*);
     DisplayFont(DisplayFont&&);
     ~DisplayFont();
 
@@ -45,7 +54,7 @@ class DisplayFont {
                                                  long utf8Codepoint) const;
 
     uint getHeight() const;
-    uint getTextExtent(std::string_view text) const;
+    uint getTextExtent(std::string_view) const;
     XftFont* getXFont() const;
 
   private:
@@ -79,10 +88,6 @@ class Drw {
                    bool invert);
 
     void map(Window win, int x, int y, uint w, uint h) const;
-
-    // These should move into their own class
-    Cur* cur_create(int shape) const;
-    void cur_free(Cur* cursor) const;
 
   private:
     uint fWidth, fHeight;
