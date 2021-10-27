@@ -66,7 +66,6 @@
 #define WIDTH(X) ((X)->w + 2 * (X)->bw)
 #define HEIGHT(X) ((X)->h + 2 * (X)->bw)
 #define TAGMASK ((1 << tags.size()) - 1)
-#define TEXTW(X) (drw->fontset_getwidth((X)) + lrpad)
 
 /* enums */
 enum { CurNormal, CurResize, CurMove, CurLast }; /* cursor */
@@ -478,18 +477,19 @@ void buttonpress(XEvent* e) {
     if (ev->window == selmon->barwin) {
         int x = 0;
         i = 0;
-        do
-            x += TEXTW(tags[i].data());
-        while (ev->x >= x && ++i < tags.size());
+        do {
+            x += drw->getTextWidth(tags[i]) + lrpad;
+        } while (ev->x >= x && ++i < tags.size());
         if (i < tags.size()) {
             click = ClkTagBar;
             arg.ui = 1 << i;
-        } else if (ev->x < x + blw)
+        } else if (ev->x < x + blw) {
             click = ClkLtSymbol;
-        else if (ev->x > selmon->ww - (int)TEXTW(stext))
+        } else if (ev->x > selmon->ww - (drw->getTextWidth(stext) + lrpad)) {
             click = ClkStatusText;
-        else
+        } else {
             click = ClkWinTitle;
+        }
     } else if ((c = wintoclient(ev->window))) {
         focus(c);
         restack(selmon);
@@ -749,8 +749,8 @@ void drawbar(Monitor* m) {
     /* draw status first so it can be overdrawn by tags later */
     if (m == selmon) { /* status is only drawn on selected monitor */
         drw->setScheme(scheme->normal);
-        tw = TEXTW(stext) - lrpad + 2; /* 2px right padding */
-        drw->text(m->ww - tw, 0, tw, bh, 0, stext, 0);
+        tw = drw->getTextWidth(stext) + 2; /* 2px right padding */
+        drw->renderText(m->ww - tw, 0, tw, bh, 0, stext, 0);
     }
 
     for (c = m->clients; c; c = c->next) {
@@ -760,29 +760,30 @@ void drawbar(Monitor* m) {
     }
     x = 0;
     for (size_t i = 0; i < tags.size(); i++) {
-        w = TEXTW(tags[i].data());
+        w = drw->getTextWidth(tags[i]) + lrpad;
         drw->setScheme(m->tagset[m->seltags] & 1 << i ? scheme->selected
                                                       : scheme->normal);
-        drw->text(x, 0, w, bh, lrpad / 2, tags[i], urg & 1 << i);
+        drw->renderText(x, 0, w, bh, lrpad / 2, tags[i], urg & 1 << i);
         if (occ & 1 << i)
-            drw->rect(x + boxs, boxs, boxw, boxw,
-                      m == selmon && selmon->sel && selmon->sel->tags & 1 << i,
-                      urg & 1 << i);
+            drw->renderRect(x + boxs, boxs, boxw, boxw,
+                            m == selmon && selmon->sel &&
+                                selmon->sel->tags & 1 << i,
+                            urg & 1 << i);
         x += w;
     }
-    w = blw = TEXTW(m->ltsymbol);
+    w = blw =  drw->getTextWidth(m->ltsymbol) + lrpad;
     drw->setScheme(scheme->normal);
-    x = drw->text(x, 0, w, bh, lrpad / 2, m->ltsymbol, 0);
+    x = drw->renderText(x, 0, w, bh, lrpad / 2, m->ltsymbol, 0);
 
     if ((w = m->ww - tw - x) > bh) {
         if (m->sel) {
             drw->setScheme(m == selmon ? scheme->selected : scheme->normal);
-            drw->text(x, 0, w, bh, lrpad / 2, m->sel->name, 0);
+            drw->renderText(x, 0, w, bh, lrpad / 2, m->sel->name, 0);
             if (m->sel->isfloating)
-                drw->rect(x + boxs, boxs, boxw, boxw, m->sel->isfixed, 0);
+                drw->renderRect(x + boxs, boxs, boxw, boxw, m->sel->isfixed, 0);
         } else {
             drw->setScheme(scheme->normal);
-            drw->rect(x, 0, w, bh, 1, 1);
+            drw->renderRect(x, 0, w, bh, 1, 1);
         }
     }
     drw->map(m->barwin, 0, 0, m->ww, bh);

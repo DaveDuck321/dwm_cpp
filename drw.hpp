@@ -66,17 +66,17 @@ class Drw {
     const std::vector<DisplayFont>&
     createFontSet(const std::vector<std::string>& fontNames);
 
-    uint fontset_getwidth(const char* text);
-
     uint getPrimaryFontHeight() const;
     const std::vector<DisplayFont>& getFontset() const;
 
     Theme<XColorScheme> parseTheme(const Theme<ColorScheme>&) const;
     void setScheme(const XColorScheme&);
 
-    void rect(int x, int y, uint w, uint h, int filled, int invert) const;
-    int text(int x, int y, uint w, uint h, uint lpad, std::string_view text,
-             int invert);
+    int getTextWidth(std::string_view);
+    void renderRect(int x, int y, uint w, uint h, bool filled,
+                    bool invert) const;
+    int renderText(int x, int y, uint w, uint h, uint lpad, std::string_view,
+                   bool invert);
 
     void map(Window win, int x, int y, uint w, uint h) const;
 

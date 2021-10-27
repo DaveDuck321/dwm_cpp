@@ -287,7 +287,8 @@ const std::vector<DisplayFont>& Drw::getFontset() const { return fFonts; }
 
 void Drw::setScheme(const XColorScheme& scheme) { fScheme = scheme; }
 
-void Drw::rect(int x, int y, uint w, uint h, int filled, int invert) const {
+void Drw::renderRect(const int x, const int y, const uint w, const uint h,
+                     const bool filled, const bool invert) const {
     if (!fScheme)
         return;
 
@@ -302,8 +303,8 @@ void Drw::rect(int x, int y, uint w, uint h, int filled, int invert) const {
     }
 }
 
-int Drw::text(int x, const int y, uint w, uint h, const uint lpad,
-              std::string_view text, const int invert) {
+int Drw::renderText(int x, const int y, uint w, uint h, const uint lpad,
+                    std::string_view text, const bool invert) {
 
     bool shouldRender = x || y || w || h;
     if ((shouldRender && !fScheme) || text.empty() || fFonts.empty()) {
@@ -375,16 +376,13 @@ int Drw::text(int x, const int y, uint w, uint h, const uint lpad,
     return x + (shouldRender ? w : 0);
 }
 
+int Drw::getTextWidth(const std::string_view text) {
+    return renderText(0, 0, 0, 0, 0, text, 0);
+}
+
 void Drw::map(Window win, int x, int y, uint w, uint h) const {
     XCopyArea(fDisplay, fDrawable, win, fGC, x, y, w, h, x, y);
     XSync(fDisplay, False);
-}
-
-uint Drw::fontset_getwidth(const char* textToDraw) {
-    if (!textToDraw) {
-        return 0;
-    }
-    return text(0, 0, 0, 0, 0, textToDraw, 0);
 }
 
 Cur* Drw::cur_create(int shape) const {
