@@ -6,7 +6,8 @@
 #include <X11/Xlib.h>
 
 #include <cstdio>
-#include <string>
+#include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -106,6 +107,23 @@ std::string_view cropTextToExtent(const DisplayFont& renderingFont,
 }
 
 } // namespace
+
+XColorScheme::XColorScheme(Display* display, const int screen,
+                           const ColorScheme& scheme) {
+
+    const auto defaultVisual = DefaultVisual(display, screen);
+    const auto defaultColormap = DefaultColormap(display, screen);
+
+    if (!XftColorAllocName(display, defaultVisual, defaultColormap,
+                           scheme.foreground.data(), &foreground) ||
+        !XftColorAllocName(display, defaultVisual, defaultColormap,
+                           scheme.background.data(), &background) ||
+        !XftColorAllocName(display, defaultVisual, defaultColormap,
+                           scheme.border.data(), &border)) {
+
+        die("error, color allocation failure");
+    }
+}
 
 void DisplayFont::dieIfFontInvalid() const {
     // This isn't the original behaviour, should just throw to prevent Font
@@ -256,43 +274,26 @@ Drw::createFontSet(const std::vector<std::string>& fontNames) {
     return fFonts;
 }
 
-void Drw::clr_create(XftColor* dest, const char* clrname) const {
-    if (!dest || !clrname)
-        return;
-
-    if (!XftColorAllocName(fDisplay, DefaultVisual(fDisplay, fScreen),
-                           DefaultColormap(fDisplay, fScreen), clrname, dest)) {
-        die("error, cannot allocate color '%s'", clrname);
-    }
-}
-
-/* Wrapper to create color schemes. The caller has to call free(3) on the
- * returned color scheme when done using it. */
-XftColor* Drw::scm_create(const ColorPalette& palette) const {
-    XftColor* ret;
-    /* need at least two colors for a scheme */
-    if (palette.size() < 2 || !(ret = ecalloc<XftColor>(palette.size()))) {
-        return nullptr;
-    }
-
-    for (size_t i = 0; i < palette.size(); i++) {
-        clr_create(&ret[i], palette[i]);
-    }
-    return ret;
+Theme<XColorScheme> Drw::parseTheme(const Theme<ColorScheme>& scheme) const {
+    return {
+        .normal = {fDisplay, fScreen, scheme.normal},
+        .selected = {fDisplay, fScreen, scheme.selected},
+    };
 }
 
 uint Drw::getPrimaryFontHeight() const { return fFonts.at(0).getHeight(); }
 
 const std::vector<DisplayFont>& Drw::getFontset() const { return fFonts; }
 
-void Drw::setscheme(XftColor* scm) { fScheme = scm; }
+void Drw::setScheme(const XColorScheme& scheme) { fScheme = scheme; }
 
 void Drw::rect(int x, int y, uint w, uint h, int filled, int invert) const {
     if (!fScheme)
         return;
 
     XSetForeground(fDisplay, fGC,
-                   invert ? fScheme[ColBg].pixel : fScheme[ColFg].pixel);
+                   invert ? fScheme->background.pixel
+                          : fScheme->foreground.pixel);
 
     if (filled) {
         XFillRectangle(fDisplay, fDrawable, fGC, x, y, w, h);
@@ -311,7 +312,9 @@ int Drw::text(int x, const int y, uint w, uint h, const uint lpad,
 
     XftDraw* xftDrawer = nullptr;
     if (shouldRender) {
-        XSetForeground(fDisplay, fGC, fScheme[invert ? ColFg : ColBg].pixel);
+        XSetForeground(fDisplay, fGC,
+                       invert ? fScheme->foreground.pixel
+                              : fScheme->background.pixel);
         XFillRectangle(fDisplay, fDrawable, fGC, x, y, w, h);
         xftDrawer =
             XftDrawCreate(fDisplay, fDrawable, DefaultVisual(fDisplay, fScreen),
@@ -350,7 +353,9 @@ int Drw::text(int x, const int y, uint w, uint h, const uint lpad,
             if (shouldRender) {
                 const auto ty = y + (h - renderingFont->getHeight()) / 2 +
                                 renderingFont->getXFont()->ascent;
-                XftDrawStringUtf8(xftDrawer, &fScheme[invert ? ColBg : ColFg],
+                XftDrawStringUtf8(xftDrawer,
+                                  invert ? &fScheme->background
+                                         : &fScheme->foreground,
                                   renderingFont->getXFont(), x, ty,
                                   (XftChar8*)croppedTextToRender.data(),
                                   croppedTextToRender.size());

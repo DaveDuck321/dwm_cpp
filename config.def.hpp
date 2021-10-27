@@ -17,11 +17,17 @@ const char col_gray3[]       = "#bbbbbb";
 const char col_gray4[]       = "#eeeeee";
 const char col_cyan[]        = "#005577";
 
-const std::vector<ColorPalette> colors = {
-	/*               fg         bg         border   */
-	// TODO: improve this
-	/*[SchemeNorm] = */ {{ col_gray3, col_gray1, col_gray2 }},
-	/*[SchemeSel]  = */ {{ col_gray4, col_cyan,  col_cyan  }},
+const Theme<ColorScheme> colors {
+	.normal = {
+		.foreground = col_gray3,
+		.background = col_gray1,
+		.border = col_gray2,
+	},
+	.selected = {
+		.foreground = col_gray4,
+		.background = col_cyan,
+		.border = col_cyan,
+	},
 };
 
 /* tagging */

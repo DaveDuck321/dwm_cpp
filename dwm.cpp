@@ -48,6 +48,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <optional>
 
 /* macros */
 #define BUTTONMASK (ButtonPressMask | ButtonReleaseMask)
@@ -69,7 +70,7 @@
 
 /* enums */
 enum { CurNormal, CurResize, CurMove, CurLast }; /* cursor */
-enum { SchemeNorm, SchemeSel };                  /* color schemes */
+
 enum {
     NetSupported,
     NetWMName,
@@ -286,7 +287,7 @@ unsigned int numlockmask = 0;
 Atom wmatom[WMLast], netatom[NetLast];
 int running = 1;
 Cur* cursor[CurLast];
-Clr** scheme;
+std::optional<Theme<XColorScheme>> scheme;
 Display* dpy;
 Drw* drw;
 Monitor *mons, *selmon;
@@ -531,10 +532,6 @@ void cleanup(void) {
     for (i = 0; i < CurLast; i++)
         drw->cur_free(cursor[i]);
 
-    for (size_t i = 0; i < colors.size(); i++) {
-        free(scheme[i]);
-    }
-
     XDestroyWindow(dpy, wmcheckwin);
     delete drw; // TODO: this should be a unique pointer
     XSync(dpy, False);
@@ -751,7 +748,7 @@ void drawbar(Monitor* m) {
 
     /* draw status first so it can be overdrawn by tags later */
     if (m == selmon) { /* status is only drawn on selected monitor */
-        drw->setscheme(scheme[SchemeNorm]);
+        drw->setScheme(scheme->normal);
         tw = TEXTW(stext) - lrpad + 2; /* 2px right padding */
         drw->text(m->ww - tw, 0, tw, bh, 0, stext, 0);
     }
@@ -764,8 +761,8 @@ void drawbar(Monitor* m) {
     x = 0;
     for (size_t i = 0; i < tags.size(); i++) {
         w = TEXTW(tags[i].data());
-        drw->setscheme(
-            scheme[m->tagset[m->seltags] & 1 << i ? SchemeSel : SchemeNorm]);
+        drw->setScheme(m->tagset[m->seltags] & 1 << i ? scheme->selected
+                                                      : scheme->normal);
         drw->text(x, 0, w, bh, lrpad / 2, tags[i], urg & 1 << i);
         if (occ & 1 << i)
             drw->rect(x + boxs, boxs, boxw, boxw,
@@ -774,17 +771,17 @@ void drawbar(Monitor* m) {
         x += w;
     }
     w = blw = TEXTW(m->ltsymbol);
-    drw->setscheme(scheme[SchemeNorm]);
+    drw->setScheme(scheme->normal);
     x = drw->text(x, 0, w, bh, lrpad / 2, m->ltsymbol, 0);
 
     if ((w = m->ww - tw - x) > bh) {
         if (m->sel) {
-            drw->setscheme(scheme[m == selmon ? SchemeSel : SchemeNorm]);
+            drw->setScheme(m == selmon ? scheme->selected : scheme->normal);
             drw->text(x, 0, w, bh, lrpad / 2, m->sel->name, 0);
             if (m->sel->isfloating)
                 drw->rect(x + boxs, boxs, boxw, boxw, m->sel->isfixed, 0);
         } else {
-            drw->setscheme(scheme[SchemeNorm]);
+            drw->setScheme(scheme->normal);
             drw->rect(x, 0, w, bh, 1, 1);
         }
     }
@@ -838,7 +835,7 @@ void focus(Client* c) {
         detachstack(c);
         attachstack(c);
         grabbuttons(c, 1);
-        XSetWindowBorder(dpy, c->win, scheme[SchemeSel][ColBorder].pixel);
+        XSetWindowBorder(dpy, c->win, scheme->selected.border.pixel);
         setfocus(c);
     } else {
         XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
@@ -1080,7 +1077,7 @@ void manage(Window w, XWindowAttributes* wa) {
 
     wc.border_width = c->bw;
     XConfigureWindow(dpy, w, CWBorderWidth, &wc);
-    XSetWindowBorder(dpy, w, scheme[SchemeNorm][ColBorder].pixel);
+    XSetWindowBorder(dpy, w, scheme->normal.border.pixel);
     configure(c); /* propagates border_width, if size doesn't change */
     updatewindowtype(c);
     updatesizehints(c);
@@ -1571,10 +1568,7 @@ void setup(void) {
     cursor[CurResize] = drw->cur_create(XC_sizing);
     cursor[CurMove] = drw->cur_create(XC_fleur);
     /* init appearance */
-    scheme = ecalloc<Clr*>(colors.size());
-    for (size_t i = 0; i < colors.size(); i++) {
-        scheme[i] = drw->scm_create(colors[i]);
-    }
+    scheme = drw->parseTheme(colors);
     /* init bars */
     updatebars();
     updatestatus();
@@ -1746,7 +1740,7 @@ void unfocus(Client* c, int setfocus) {
     if (!c)
         return;
     grabbuttons(c, 0);
-    XSetWindowBorder(dpy, c->win, scheme[SchemeNorm][ColBorder].pixel);
+    XSetWindowBorder(dpy, c->win, scheme->normal.border.pixel);
     if (setfocus) {
         XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
         XDeleteProperty(dpy, root, netatom[NetActiveWindow]);

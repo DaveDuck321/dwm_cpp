@@ -5,11 +5,31 @@
 #include <X11/Xlib.h>
 
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 
 struct Cur {
     Cursor cursor;
+};
+
+struct ColorScheme {
+    std::string foreground;
+    std::string background;
+    std::string border;
+};
+
+struct XColorScheme {
+    XColorScheme(Display*, int screen, const ColorScheme&);
+
+    XftColor foreground;
+    XftColor background;
+    XftColor border;
+};
+
+template <typename Scheme> struct Theme {
+    Scheme normal;
+    Scheme selected;
 };
 
 class DisplayFont {
@@ -36,11 +56,6 @@ class DisplayFont {
     FcPattern* fPattern;
 };
 
-using ColorPalette = std::array<const char *, 3>;
-
-enum { ColFg, ColBg, ColBorder }; /* Clr scheme index */
-typedef XftColor Clr;
-
 class Drw {
   public:
     Drw(Display* dpy, int screen, Window win, uint w, uint h);
@@ -56,10 +71,8 @@ class Drw {
     uint getPrimaryFontHeight() const;
     const std::vector<DisplayFont>& getFontset() const;
 
-    void clr_create(Clr* dest, const char* clrname) const;
-    Clr* scm_create(const ColorPalette& paletteNames) const;
-
-    void setscheme(Clr* scm);
+    Theme<XColorScheme> parseTheme(const Theme<ColorScheme>&) const;
+    void setScheme(const XColorScheme&);
 
     void rect(int x, int y, uint w, uint h, int filled, int invert) const;
     int text(int x, int y, uint w, uint h, uint lpad, std::string_view text,
@@ -78,7 +91,7 @@ class Drw {
     Window fRoot;
     Drawable fDrawable;
     GC fGC;
-    Clr* fScheme;
+    std::optional<XColorScheme> fScheme;
 
     std::vector<DisplayFont> fFonts;
 };
