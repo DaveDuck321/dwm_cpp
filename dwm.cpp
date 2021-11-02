@@ -256,7 +256,7 @@ Client* nexttiled(Client* c);
 void pop(Client*);
 void propertynotify(XEvent* e);
 void quit(const Arg* arg);
-Monitor* recttomon(int x, int y, int w, int h);
+Monitor* recttomon(const Rect&);
 void resizemouse(const Arg* arg);
 void restack(Monitor* m);
 void run(void);
@@ -313,15 +313,6 @@ Drw* drw;
 
 Monitor *selmon, *allMonitors;
 Window root, wmcheckwin;
-
-int intersect(int x, int y, int width, int height, Monitor* monitor) {
-    return std::max(
-               0, std::min(x + width, monitor->wRect.x + monitor->wRect.width) -
-                      std::max(x, monitor->wRect.x)) *
-           std::max(0, std::min(y + height,
-                                monitor->wRect.y + monitor->wRect.height) -
-                           std::max(y, monitor->wRect.y));
-}
 
 constexpr bool contains(const std::string_view haystack,
                         const std::string_view needle) {
@@ -594,9 +585,7 @@ void Client::resizeWithMouse() {
     while (XCheckMaskEvent(dpy, EnterWindowMask, &event)) {
     }
 
-    if (Monitor* monitor =
-            recttomon(fSize.x, fSize.y, fSize.width, fSize.height);
-        monitor != selmon) {
+    if (Monitor* monitor = recttomon(fSize); monitor != selmon) {
         sendmon(this, monitor);
         selmon = monitor;
         focus(NULL);
@@ -665,9 +654,7 @@ void Client::moveWithMouse() {
 
     XUngrabPointer(dpy, CurrentTime);
 
-    if (Monitor* monitor =
-            recttomon(fSize.x, fSize.y, fSize.width, fSize.height);
-        monitor != selmon) {
+    if (Monitor* monitor = recttomon(fSize); monitor != selmon) {
         sendmon(this, monitor);
         selmon = monitor;
         focus(NULL);
@@ -1635,7 +1622,7 @@ void motionnotify(XEvent* e) {
 
     if (ev->window != root)
         return;
-    if ((m = recttomon(ev->x_root, ev->y_root, 1, 1)) != mon && mon) {
+    if ((m = recttomon({ev->x_root, ev->y_root, 1, 1})) != mon && mon) {
         unfocus(selmon->sel, 1);
         selmon = m;
         focus(NULL);
@@ -1679,12 +1666,11 @@ void propertynotify(XEvent* e) {
 
 void quit(const Arg* arg) { running = 0; }
 
-Monitor* recttomon(int x, int y, int w, int h) {
-    Monitor *m, *r = selmon;
+Monitor* recttomon(const Rect& rect) {
+    Monitor* r = selmon;
     int area = 0;
-
-    for (m = allMonitors; m; m = m->next)
-        if (int a = intersect(x, y, w, h, m); a > area) {
+    for (Monitor* m = allMonitors; m; m = m->next)
+        if (int a = rect.getIntersection(m->wRect); a > area) {
             area = a;
             r = m;
         }
@@ -2199,7 +2185,7 @@ Monitor* wintomon(Window w) {
     Monitor* m;
 
     if (w == root && getrootptr(&x, &y))
-        return recttomon(x, y, 1, 1);
+        return recttomon({x, y, 1, 1});
     for (m = allMonitors; m; m = m->next)
         if (w == m->barwin)
             return m;
