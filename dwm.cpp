@@ -185,23 +185,25 @@ struct Layout {
 };
 
 struct Monitor {
+    Monitor();
+    ~Monitor();
+    Monitor(Monitor&&) = delete;
+
     char ltsymbol[16];
     float mfact;
     int nmaster;
-    int num;
-    int by;            /* bar geometry */
+    int num = 0;
+    int by = 0;        /* bar geometry */
     Rect sRect, wRect; /* Screen and window geometry */
     int gappx;         /* gaps between windows */
-    unsigned int seltags;
-    unsigned int sellt;
-    unsigned int tagset[2];
-    int showbar;
-    int topbar;
-    Client* clients;
-    Client* sel;
-    Client* stack;
-    Monitor* next;
-    Window barwin;
+    uint seltags = 0;
+    uint sellt = 0;
+    uint tagset[2];
+    bool showbar, topbar;
+    Client* clients = nullptr;
+    Client* sel = nullptr;
+    Client* stack = nullptr;
+    Window barwin = 0;
     const Layout* layout[2];
 };
 
@@ -216,22 +218,20 @@ struct Rule {
 
 /* function declarations */
 void arrange(Monitor* m);
-void arrangemon(Monitor* m);
+void arrangemon(Monitor& m);
 void attach(Client* c);
 void attachstack(Client* c);
 void buttonpress(XEvent* e);
 void checkotherwm(void);
 void cleanup(void);
-void cleanupmon(Monitor* mon);
 void clientmessage(XEvent* e);
 void configurenotify(XEvent* e);
 void configurerequest(XEvent* e);
-Monitor* createmon(void);
 void destroynotify(XEvent* e);
 void detach(Client* c);
 void detachstack(Client* c);
 Monitor* dirtomon(int dir);
-void drawbar(Monitor* m);
+void drawbar(const Monitor& m);
 void drawbars(void);
 void enternotify(XEvent* e);
 void expose(XEvent* e);
@@ -279,7 +279,7 @@ void toggleview(const Arg* arg);
 void unfocus(Client* c, int setfocus);
 void unmanage(Client* c, bool destroyed);
 void unmapnotify(XEvent* e);
-void updatebarpos(Monitor* m);
+void updatebarpos(Monitor& m);
 void updatebars(void);
 void updateclientlist(void);
 int updategeom(void);
@@ -311,12 +311,22 @@ std::optional<Theme<XColorScheme>> scheme;
 Display* dpy;
 Drw* drw;
 
-Monitor *selmon, *allMonitors;
+std::vector<std::unique_ptr<Monitor>> allMonitors;
+Monitor* selmon;
 Window root, wmcheckwin;
 
 constexpr bool contains(const std::string_view haystack,
                         const std::string_view needle) {
     return std::string_view::npos != haystack.find(needle);
+}
+
+int getMonitorIndex(Monitor* monitor) {
+    // TODO: This is a complexity regression for forward monitor navigation
+    for (size_t i = 0; i < allMonitors.size(); i++) {
+        if (allMonitors[i].get() == monitor)
+            return i;
+    }
+    return 0; // TODO: throw here
 }
 
 /* configuration, allows nested code to access above variables */
@@ -765,7 +775,7 @@ void Client::updatePropertyFromEvent(Atom property) {
     if (property == XA_WM_NAME || property == netatom[NetWMName]) {
         updateWindowTitleFromX();
         if (this == fMonitor->sel)
-            drawbar(fMonitor);
+            drawbar(*fMonitor);
     }
     if (property == netatom[NetWMWindowType])
         updateWindowTypeFromX();
@@ -896,12 +906,11 @@ void Client::applyCustomRules() {
             fFlags.isFloating = rule.isfloating;
             fTags |= rule.tags;
 
-            Monitor* monitor;
-            for (monitor = allMonitors; monitor && monitor->num != rule.monitor;
-                 monitor = monitor->next) { // Empty body
-            }
-            if (monitor) {
-                fMonitor = monitor;
+            for (const auto& monitor : allMonitors) {
+                if (monitor->num == rule.monitor) {
+                    fMonitor = monitor.get();
+                    break;
+                }
             }
         }
     }
@@ -1037,24 +1046,42 @@ void Client::updateSizeHintsFromX() {
                       fMaxHeight == fMinHeight);
 }
 
-void arrange(Monitor* m) {
-    if (m)
-        showhide(m->stack);
-    else
-        for (m = allMonitors; m; m = m->next)
-            showhide(m->stack);
-    if (m) {
-        arrangemon(m);
-        restack(m);
-    } else
-        for (m = allMonitors; m; m = m->next)
-            arrangemon(m);
+Monitor::Monitor()
+    : mfact{::mfact}, nmaster{::nmaster}, gappx{::gappx}, showbar{::showbar},
+      topbar{::topbar} {
+    tagset[0] = tagset[1] = 1;
+    layout[0] = &layouts[0];
+    layout[1] = &layouts[1 % layouts.size()];
+    strncpy(ltsymbol, layouts[0].symbol, sizeof(ltsymbol));
 }
 
-void arrangemon(Monitor* m) {
-    strncpy(m->ltsymbol, m->layout[m->sellt]->symbol, sizeof m->ltsymbol);
-    if (m->layout[m->sellt]->arrange)
-        m->layout[m->sellt]->arrange(m);
+Monitor::~Monitor() {
+    XUnmapWindow(dpy, barwin);
+    XDestroyWindow(dpy, barwin);
+}
+
+void arrange(Monitor* m) {
+    if (m) {
+        showhide(m->stack);
+    } else {
+        for (const auto& monitor : allMonitors) {
+            showhide(monitor->stack);
+        }
+    }
+    if (m) {
+        arrangemon(*m);
+        restack(m);
+    } else {
+        for (const auto& monitor : allMonitors) {
+            arrangemon(*monitor);
+        }
+    }
+}
+
+void arrangemon(Monitor& m) {
+    strncpy(m.ltsymbol, m.layout[m.sellt]->symbol, sizeof(m.ltsymbol));
+    if (m.layout[m.sellt]->arrange)
+        m.layout[m.sellt]->arrange(&m);
 }
 
 void attach(Client* c) {
@@ -1130,34 +1157,19 @@ void cleanup(void) {
     view(&a);
     selmon->layout[selmon->sellt] = &foo;
 
-    for (Monitor* m = allMonitors; m; m = m->next) {
-        while (m->stack) {
-            unmanage(m->stack, false);
+    for (const auto& monitor : allMonitors) {
+        while (monitor->stack) {
+            unmanage(monitor->stack, false);
         }
     }
     XUngrabKey(dpy, AnyKey, AnyModifier, root);
-    while (allMonitors)
-        cleanupmon(allMonitors);
+    allMonitors.clear();
 
     XDestroyWindow(dpy, wmcheckwin);
     delete drw; // TODO: this should be a unique pointer
     XSync(dpy, False);
     XSetInputFocus(dpy, PointerRoot, RevertToPointerRoot, CurrentTime);
     XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
-}
-
-void cleanupmon(Monitor* mon) {
-    if (mon == allMonitors)
-        allMonitors = allMonitors->next;
-    else {
-        Monitor* m;
-        for (m = allMonitors; m && m->next != mon; m = m->next)
-            ;
-        m->next = mon->next;
-    }
-    XUnmapWindow(dpy, mon->barwin);
-    XDestroyWindow(dpy, mon->barwin);
-    delete mon;
 }
 
 void clientmessage(XEvent* e) {
@@ -1183,28 +1195,27 @@ void clientmessage(XEvent* e) {
 }
 
 void configurenotify(XEvent* e) {
-    Monitor* m;
-    Client* c;
     XConfigureEvent* ev = &e->xconfigure;
-    int dirty;
 
     /* TODO: updategeom handling sucks, needs to be simplified */
     if (ev->window == root) {
-        dirty = (screenWidth != ev->width || screenHeight != ev->height);
+        bool dirty = (screenWidth != ev->width || screenHeight != ev->height);
         screenWidth = ev->width;
         screenHeight = ev->height;
         if (updategeom() || dirty) {
             drw->resize(screenWidth, barHeight);
             updatebars();
-            for (m = allMonitors; m; m = m->next) {
-                for (c = m->clients; c; c = c->next)
-                    if (c->getFlags().isFullscreen)
-                        c->resizeXClient(m->sRect);
-                XMoveResizeWindow(dpy, m->barwin, m->wRect.x, m->by,
-                                  m->wRect.width, barHeight);
+            for (const auto& monitor : allMonitors) {
+                for (Client* c = monitor->clients; c; c = c->next) {
+                    if (c->getFlags().isFullscreen) {
+                        c->resizeXClient(monitor->sRect);
+                    }
+                }
+                XMoveResizeWindow(dpy, monitor->barwin, monitor->wRect.x,
+                                  monitor->by, monitor->wRect.width, barHeight);
             }
-            focus(NULL);
-            arrange(NULL);
+            focus(nullptr);
+            arrange(nullptr);
         }
     }
 }
@@ -1226,20 +1237,6 @@ void configurerequest(XEvent* e) {
         XConfigureWindow(dpy, ev->window, ev->value_mask, &wc);
     }
     XSync(dpy, False);
-}
-
-Monitor* createmon(void) {
-    Monitor* m = new Monitor{};
-    m->tagset[0] = m->tagset[1] = 1;
-    m->mfact = mfact;
-    m->nmaster = nmaster;
-    m->showbar = showbar;
-    m->topbar = topbar;
-    m->gappx = gappx;
-    m->layout[0] = &layouts[0];
-    m->layout[1] = &layouts[1 % layouts.size()];
-    strncpy(m->ltsymbol, layouts[0].symbol, sizeof m->ltsymbol);
-    return m;
 }
 
 void setgaps(const Arg* arg) {
@@ -1283,78 +1280,67 @@ void detachstack(Client* c) {
 }
 
 Monitor* dirtomon(int dir) {
-    Monitor* m = NULL;
+    int newIndex = (getMonitorIndex(selmon) + dir + allMonitors.size()) %
+                   allMonitors.size();
 
-    if (dir > 0) {
-        if (!(m = selmon->next))
-            m = allMonitors;
-    } else if (selmon == allMonitors)
-        for (m = allMonitors; m->next; m = m->next)
-            ;
-    else
-        for (m = allMonitors; m->next != selmon; m = m->next)
-            ;
-    return m;
+    return allMonitors[newIndex].get();
 }
 
-void drawbar(Monitor* m) {
-    int x, w, tw = 0;
+void drawbar(const Monitor& m) {
+    int tw = 0;
     int boxs = drw->getPrimaryFontHeight() / 9;
     int boxw = drw->getPrimaryFontHeight() / 6 + 2;
     unsigned int occ = 0, urg = 0;
-    Client* c;
 
     /* draw status first so it can be overdrawn by tags later */
-    if (m == selmon) { /* status is only drawn on selected monitor */
+    if (&m == selmon) { /* status is only drawn on selected monitor */
         drw->setScheme(scheme->normal);
         tw = drw->getTextWidth(stext) + 2; /* 2px right padding */
-        drw->renderText(m->wRect.width - tw, 0, tw, barHeight, 0, stext, 0);
+        drw->renderText(m.wRect.width - tw, 0, tw, barHeight, 0, stext, 0);
     }
 
-    for (c = m->clients; c; c = c->next) {
+    for (Client* c = m.clients; c; c = c->next) {
         occ |= c->fTags;
         if (c->getFlags().isUrgent)
             urg |= c->fTags;
     }
-    x = 0;
+    int x = 0;
     for (size_t i = 0; i < tags.size(); i++) {
-        w = drw->getTextWidth(tags[i]) + lrpad;
-        drw->setScheme(m->tagset[m->seltags] & 1 << i ? scheme->selected
-                                                      : scheme->normal);
+        auto w = drw->getTextWidth(tags[i]) + lrpad;
+        drw->setScheme(m.tagset[m.seltags] & 1 << i ? scheme->selected
+                                                    : scheme->normal);
         drw->renderText(x, 0, w, barHeight, lrpad / 2, tags[i], urg & 1 << i);
         if (occ & 1 << i)
             drw->renderRect(x + boxs, boxs, boxw, boxw,
-                            m == selmon && selmon->sel &&
+                            &m == selmon && selmon->sel &&
                                 selmon->sel->fTags & 1 << i,
                             urg & 1 << i);
         x += w;
     }
-    w = blw = drw->getTextWidth(m->ltsymbol) + lrpad;
+    int w = blw = drw->getTextWidth(m.ltsymbol) + lrpad;
     drw->setScheme(scheme->normal);
-    x = drw->renderText(x, 0, w, barHeight, lrpad / 2, m->ltsymbol, 0);
+    x = drw->renderText(x, 0, w, barHeight, lrpad / 2, m.ltsymbol, 0);
 
-    if ((w = m->wRect.width - tw - x) > barHeight) {
-        if (m->sel) {
-            drw->setScheme(m == selmon ? scheme->selected : scheme->normal);
-            drw->renderText(x, 0, w, barHeight, lrpad / 2, m->sel->getName(),
-                            0);
-            if (m->sel->getFlags().isFloating) {
+    if ((w = m.wRect.width - tw - x) > barHeight) {
+        if (m.sel) {
+            drw->setScheme(&m == selmon ? scheme->selected : scheme->normal);
+            drw->renderText(x, 0, w, barHeight, lrpad / 2, m.sel->getName(), 0);
+            if (m.sel->getFlags().isFloating) {
                 drw->renderRect(x + boxs, boxs, boxw, boxw,
-                                m->sel->getFlags().isFixed, 0);
+                                m.sel->getFlags().isFixed, 0);
             }
         } else {
             drw->setScheme(scheme->normal);
             drw->renderRect(x, 0, w, barHeight, 1, 1);
         }
     }
-    drw->map(m->barwin, 0, 0, m->wRect.width, barHeight);
+    drw->map(m.barwin, 0, 0, m.wRect.width, barHeight);
 }
 
 void drawbars(void) {
-    Monitor* m;
-
-    for (m = allMonitors; m; m = m->next)
-        drawbar(m);
+    for (const auto& monitor : allMonitors) {
+        drawbar(*monitor);
+    }
 }
 
 void enternotify(XEvent* e) {
@@ -1380,7 +1366,7 @@ void expose(XEvent* e) {
     XExposeEvent* ev = &e->xexpose;
 
     if (ev->count == 0 && (m = wintomon(ev->window)))
-        drawbar(m);
+        drawbar(*m);
 }
 
 void focus(Client* c) {
@@ -1416,15 +1402,14 @@ void focusin(XEvent* e) {
 }
 
 void focusmon(const Arg* arg) {
-    Monitor* m;
+    if (allMonitors.size() <= 1)
+        return;
 
-    if (!allMonitors->next)
-        return;
-    if ((m = dirtomon(arg->i)) == selmon)
-        return;
-    unfocus(selmon->sel, 0);
-    selmon = m;
-    focus(NULL);
+    if (Monitor* m = dirtomon(arg->i); m != selmon) {
+        unfocus(selmon->sel, 0);
+        selmon = m;
+        focus(nullptr);
+    }
 }
 
 void focusstack(const Arg* arg) {
@@ -1669,11 +1654,12 @@ void quit(const Arg* arg) { running = 0; }
 Monitor* recttomon(const Rect& rect) {
     Monitor* r = selmon;
     int area = 0;
-    for (Monitor* m = allMonitors; m; m = m->next)
-        if (int a = rect.getIntersection(m->wRect); a > area) {
+    for (const auto& monitor : allMonitors) {
+        if (int a = rect.getIntersection(monitor->wRect); a > area) {
             area = a;
-            r = m;
+            r = monitor.get();
         }
+    }
     return r;
 }
 
@@ -1692,7 +1678,7 @@ void restack(Monitor* m) {
     XEvent ev;
     XWindowChanges wc;
 
-    drawbar(m);
+    drawbar(*m);
     if (!m->sel)
         return;
     if (m->sel->getFlags().isFloating || !m->layout[m->sellt]->arrange)
@@ -1769,7 +1755,7 @@ void setlayout(const Arg* arg) {
     if (selmon->sel)
         arrange(selmon);
     else
-        drawbar(selmon);
+        drawbar(*selmon);
 }
 
 /* arg > 1.0 will set mfact absolutely */
@@ -1893,7 +1879,7 @@ void tag(const Arg* arg) {
 }
 
 void tagmon(const Arg* arg) {
-    if (!selmon->sel || !allMonitors->next)
+    if (!selmon->sel || allMonitors.size() <= 1)
         return;
     sendmon(selmon->sel, dirtomon(arg->i));
 }
@@ -1937,7 +1923,7 @@ void tile(Monitor* m) {
 
 void togglebar(const Arg* arg) {
     selmon->showbar = !selmon->showbar;
-    updatebarpos(selmon);
+    updatebarpos(*selmon);
     XMoveResizeWindow(dpy, selmon->barwin, selmon->wRect.x, selmon->by,
                       selmon->wRect.width, barHeight);
     arrange(selmon);
@@ -2022,118 +2008,120 @@ void updatebars(void) {
     hint->res_class = dwmClassHint;
     hint->res_name = dwmClassHint;
 
-    for (Monitor* m = allMonitors; m; m = m->next) {
-        if (m->barwin)
+    for (auto& monitor : allMonitors) {
+        if (monitor->barwin)
             continue;
-        m->barwin =
-            XCreateWindow(dpy, root, m->wRect.x, m->by, m->wRect.width,
-                          barHeight, 0, DefaultDepth(dpy, screen),
-                          CopyFromParent, DefaultVisual(dpy, screen),
-                          CWOverrideRedirect | CWBackPixmap | CWEventMask, &wa);
-        XDefineCursor(dpy, m->barwin, cursors->normal.getXCursor());
-        XMapRaised(dpy, m->barwin);
-        XSetClassHint(dpy, m->barwin, hint);
+
+        monitor->barwin = XCreateWindow(
+            dpy, root, monitor->wRect.x, monitor->by, monitor->wRect.width,
+            barHeight, 0, DefaultDepth(dpy, screen), CopyFromParent,
+            DefaultVisual(dpy, screen),
+            CWOverrideRedirect | CWBackPixmap | CWEventMask, &wa);
+
+        XDefineCursor(dpy, monitor->barwin, cursors->normal.getXCursor());
+        XMapRaised(dpy, monitor->barwin);
+        XSetClassHint(dpy, monitor->barwin, hint);
     }
     XFree(hint);
 }
 
-void updatebarpos(Monitor* m) {
-    m->wRect.y = m->sRect.y;
-    m->wRect.height = m->sRect.height;
-    if (m->showbar) {
-        m->wRect.height -= barHeight;
-        m->by = m->topbar ? m->wRect.y : m->wRect.y + m->wRect.height;
-        m->wRect.y = m->topbar ? m->wRect.y + barHeight : m->wRect.y;
+void updatebarpos(Monitor& m) {
+    m.wRect.y = m.sRect.y;
+    m.wRect.height = m.sRect.height;
+    if (m.showbar) {
+        m.wRect.height -= barHeight;
+        m.by = m.topbar ? m.wRect.y : m.wRect.y + m.wRect.height;
+        m.wRect.y = m.topbar ? m.wRect.y + barHeight : m.wRect.y;
     } else {
-        m->by = -barHeight;
+        m.by = -barHeight;
     }
 }
 
 void updateclientlist() {
-    Client* c;
-    Monitor* m;
-
     XDeleteProperty(dpy, root, netatom[NetClientList]);
-    for (m = allMonitors; m; m = m->next)
-        for (c = m->clients; c; c = c->next)
+    for (const auto& monitor : allMonitors) {
+        for (Client* c = monitor->clients; c; c = c->next) {
             XChangeProperty(dpy, root, netatom[NetClientList], XA_WINDOW, 32,
                             PropModeAppend, (unsigned char*)&(c->fWindow), 1);
+        }
+    }
 }
 
 int updategeom(void) {
-    int dirty = 0;
+    bool dirty = false;
 
 #ifdef XINERAMA
     if (XineramaIsActive(dpy)) {
-        int i, j, n, nn;
-        Monitor* m;
-        XineramaScreenInfo* info = XineramaQueryScreens(dpy, &nn);
+        int i, j, xMonitorCount;
+        int n = allMonitors.size();
+        XineramaScreenInfo* info = XineramaQueryScreens(dpy, &xMonitorCount);
 
-        for (n = 0, m = allMonitors; m; m = m->next, n++)
-            ;
         /* only consider unique geometries as separate screens */
-        XineramaScreenInfo* unique = new XineramaScreenInfo[nn];
-        for (i = 0, j = 0; i < nn; i++)
+        XineramaScreenInfo* unique = new XineramaScreenInfo[xMonitorCount];
+        for (i = 0, j = 0; i < xMonitorCount; i++) {
             if (isuniquegeom(unique, j, &info[i]))
                 memcpy(&unique[j++], &info[i], sizeof(XineramaScreenInfo));
+        }
         XFree(info);
-        nn = j;
-        if (n <= nn) { /* new monitors available */
-            for (i = 0; i < (nn - n); i++) {
-                for (m = allMonitors; m && m->next; m = m->next)
-                    ;
-                if (m)
-                    m->next = createmon();
-                else
-                    allMonitors = createmon();
-            }
-            for (i = 0, m = allMonitors; i < nn && m; m = m->next, i++)
+
+        xMonitorCount = j;
+        if (n <= xMonitorCount) { /* new monitors available */
+            for (int i = 0; i < (xMonitorCount - n); i++)
+                allMonitors.emplace_back(std::make_unique<Monitor>());
+
+            for (int i = 0; i < xMonitorCount; i++) {
+                auto& m = allMonitors[i];
+
                 if (i >= n || unique[i].x_org != m->sRect.x ||
                     unique[i].y_org != m->sRect.y ||
                     unique[i].width != m->sRect.width ||
                     unique[i].height != m->sRect.height) {
-                    dirty = 1;
+                    dirty = true;
                     m->num = i;
                     m->sRect.x = m->wRect.x = unique[i].x_org;
                     m->sRect.y = m->wRect.y = unique[i].y_org;
                     m->sRect.width = m->wRect.width = unique[i].width;
                     m->sRect.height = m->wRect.height = unique[i].height;
-                    updatebarpos(m);
+                    updatebarpos(*m);
                 }
-        } else { /* less monitors available nn < n */
-            for (i = nn; i < n; i++) {
-                for (m = allMonitors; m && m->next; m = m->next)
-                    ;
-                for (Client* c = m->clients; c; c = m->clients) {
-                    dirty = 1;
-                    m->clients = c->next;
-                    detachstack(c);
-                    c->fMonitor = allMonitors;
-                    attach(c);
-                    attachstack(c);
+            }
+        } else { /* less monitors available xMonitorCount < n */
+            for (int i = xMonitorCount; i < n; i++) {
+                auto& excessMonitor = allMonitors.back();
+                for (Client* client = excessMonitor->clients; client;
+                     client = excessMonitor->clients) {
+                    dirty = true;
+                    excessMonitor->clients = client->next;
+                    detachstack(client);
+
+                    client->fMonitor = allMonitors.front().get();
+                    attach(client);
+                    attachstack(client);
                 }
-                if (m == selmon)
-                    selmon = allMonitors;
-                cleanupmon(m);
+                if (selmon == excessMonitor.get())
+                    selmon = allMonitors.front().get();
+
+                allMonitors.pop_back();
             }
         }
         delete[] unique;
     } else
 #endif /* XINERAMA */
     {  /* default monitor setup */
-        if (!allMonitors)
-            allMonitors = createmon();
-        if (allMonitors->sRect.width != screenWidth ||
-            allMonitors->sRect.height != screenHeight) {
-            dirty = 1;
-            allMonitors->sRect.width = allMonitors->wRect.width = screenWidth;
-            allMonitors->sRect.height = allMonitors->wRect.height =
-                screenHeight;
-            updatebarpos(allMonitors);
+        if (allMonitors.empty())
+            allMonitors.emplace_back(std::make_unique<Monitor>());
+
+        auto& monitor = *allMonitors.front();
+        if (monitor.sRect.width != screenWidth ||
+            monitor.sRect.height != screenHeight) {
+            dirty = true;
+            monitor.sRect.width = monitor.wRect.width = screenWidth;
+            monitor.sRect.height = monitor.wRect.height = screenHeight;
+            updatebarpos(monitor);
         }
     }
     if (dirty) {
-        selmon = allMonitors;
+        selmon = allMonitors.front().get();
         selmon = wintomon(root);
     }
     return dirty;
@@ -2155,7 +2143,7 @@ void updatenumlockmask(void) {
 void updatestatus(void) {
     if (!gettextprop(root, XA_WM_NAME, stext, sizeof(stext)))
         strcpy(stext, "dwm-" VERSION);
-    drawbar(selmon);
+    drawbar(*selmon);
 }
 
 void view(const Arg* arg) {
@@ -2169,28 +2157,27 @@ void view(const Arg* arg) {
 }
 
 Client* wintoclient(Window w) {
-    Client* c;
-    Monitor* m;
-
-    for (m = allMonitors; m; m = m->next)
-        for (c = m->clients; c; c = c->next)
+    for (const auto& monitor : allMonitors) {
+        for (Client* c = monitor->clients; c; c = c->next) {
             if (c->fWindow == w)
                 return c;
+        }
+    }
     return NULL;
 }
 
 Monitor* wintomon(Window w) {
     int x, y;
-    Client* c;
-    Monitor* m;
-
     if (w == root && getrootptr(&x, &y))
         return recttomon({x, y, 1, 1});
-    for (m = allMonitors; m; m = m->next)
-        if (w == m->barwin)
-            return m;
-    if ((c = wintoclient(w)))
-        return c->fMonitor;
+
+    for (const auto& monitor : allMonitors) {
+        if (w == monitor->barwin)
+            return monitor.get();
+    }
+    if (Client* client = wintoclient(w); client)
+        return client->fMonitor;
+
     return selmon;
 }
 
@@ -2222,11 +2209,11 @@ int xerrorstart(Display* dpy, XErrorEvent* ee) {
 }
 
 void zoom(const Arg* arg) {
-    Client* c = selmon->sel;
-
     if (!selmon->layout[selmon->sellt]->arrange ||
         (selmon->sel && selmon->sel->getFlags().isFloating))
         return;
+
+    Client* c = selmon->sel;
     if (c == nexttiled(selmon->clients))
         if (!c || !(c = nexttiled(c->next)))
             return;
