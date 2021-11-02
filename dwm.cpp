@@ -180,7 +180,7 @@ struct Key {
 };
 
 struct Layout {
-    const char* symbol;
+    const char symbol[16];
     void (*arrange)(Monitor*);
 };
 
