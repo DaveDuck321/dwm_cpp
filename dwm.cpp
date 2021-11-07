@@ -39,6 +39,7 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string_view>
 #include <sys/wait.h>
 
@@ -98,7 +99,7 @@ struct Button {
 };
 
 typedef struct Monitor Monitor;
-typedef struct Client Client;
+typedef class Client Client;
 
 struct CursorTheme {
     CursorFont normal;
@@ -126,13 +127,13 @@ class Client {
     void resize(int x, int y, int width, int height, bool interact);
     void resizeWithMouse();
     void moveWithMouse();
+    void hideXClientIfInvisible();
 
     void setState(long state) const;
     void setUrgent(bool urgent);
     void setFocus() const;
     void setFullscreen(bool fullscreen);
     void toggleFloating();
-    void showHide();
 
     void updatePropertyFromEvent(Atom property);
 
@@ -153,8 +154,6 @@ class Client {
     void updateSizeHintsFromX();
 
   public:
-    Client* next; // TODO: this should be a vector
-    Client* snext;
     Monitor* fMonitor; // TODO: this is bad encapsulation
     Window fWindow;
     uint fTags;
@@ -188,6 +187,9 @@ struct Monitor {
     Monitor();
     ~Monitor();
     Monitor(Monitor&&) = delete;
+    auto getTiledClients() const;
+    auto findClientLocation(Client* client) const;
+    void hideClientsIfInvisible() const;
 
     char ltsymbol[16];
     float mfact;
@@ -200,9 +202,9 @@ struct Monitor {
     uint sellt = 0;
     uint tagset[2];
     bool showbar, topbar;
-    Client* clients = nullptr;
+    std::vector<std::unique_ptr<Client>> clients;
+    std::vector<Client*> stack;
     Client* sel = nullptr;
-    Client* stack = nullptr;
     Window barwin = 0;
     const Layout* layout[2];
 };
@@ -219,7 +221,7 @@ struct Rule {
 /* function declarations */
 void arrange(Monitor* m);
 void arrangemon(Monitor& m);
-void attach(Client* c);
+Client* attach(std::unique_ptr<Client>);
 void attachstack(Client* c);
 void buttonpress(XEvent* e);
 void checkotherwm(void);
@@ -228,7 +230,7 @@ void clientmessage(XEvent* e);
 void configurenotify(XEvent* e);
 void configurerequest(XEvent* e);
 void destroynotify(XEvent* e);
-void detach(Client* c);
+std::unique_ptr<Client> detach(Client* client);
 void detachstack(Client* c);
 Monitor* dirtomon(int dir);
 void drawbar(const Monitor& m);
@@ -252,7 +254,6 @@ void maprequest(XEvent* e);
 void monocle(Monitor* m);
 void motionnotify(XEvent* e);
 void movemouse(const Arg* arg);
-Client* nexttiled(Client* c);
 void pop(Client*);
 void propertynotify(XEvent* e);
 void quit(const Arg* arg);
@@ -266,7 +267,6 @@ void setgaps(const Arg* arg);
 void setlayout(const Arg* arg);
 void setmfact(const Arg* arg);
 void setup(void);
-void showhide(Client* c);
 void sigchld(int unused);
 void spawn(const Arg* arg);
 void tag(const Arg* arg);
@@ -671,6 +671,19 @@ void Client::moveWithMouse() {
     }
 }
 
+void Client::hideXClientIfInvisible() {
+    if (isVisible()) {
+        XMoveWindow(dpy, fWindow, fSize.x, fSize.y);
+        if ((!fMonitor->layout[fMonitor->sellt]->arrange ||
+             fFlags.isFloating) &&
+            !fFlags.isFullscreen) {
+            resize(fSize.x, fSize.y, fSize.width, fSize.height, false);
+        }
+    } else {
+        XMoveWindow(dpy, fWindow, getOuterWidth() * -2, fSize.y);
+    }
+}
+
 void Client::setState(long state) const {
     long data[] = {state, None};
 
@@ -731,23 +744,6 @@ void Client::toggleFloating() {
     fFlags.isFloating = !fFlags.isFloating || fFlags.isFixed;
     if (fFlags.isFloating) {
         resize(fSize.x, fSize.y, fSize.width, fSize.height, false);
-    }
-}
-
-void Client::showHide() {
-    if (isVisible()) {
-        /* show clients top down */
-        XMoveWindow(dpy, fWindow, fSize.x, fSize.y);
-        if ((!fMonitor->layout[fMonitor->sellt]->arrange ||
-             fFlags.isFloating) &&
-            !fFlags.isFullscreen) {
-            resize(fSize.x, fSize.y, fSize.width, fSize.height, false);
-        }
-        showhide(snext);
-    } else {
-        /* hide clients bottom up */
-        showhide(snext);
-        XMoveWindow(dpy, fWindow, getOuterWidth() * -2, fSize.y);
     }
 }
 
@@ -1060,19 +1056,37 @@ Monitor::~Monitor() {
     XDestroyWindow(dpy, barwin);
 }
 
+auto Monitor::getTiledClients() const {
+    return std::views::filter(clients, [](const auto& client) {
+        return !client->getFlags().isFloating && client->isVisible();
+    });
+}
+
+auto Monitor::findClientLocation(Client* client) const {
+    return std::ranges::find_if(
+        client->fMonitor->clients,
+        [=](const auto& ptr) { return client == ptr.get(); });
+}
+
+void Monitor::hideClientsIfInvisible() const {
+    for (auto& client : stack) {
+        if (client->isVisible())
+            client->hideXClientIfInvisible();
+    }
+    for (auto& client : std::views::reverse(stack)) {
+        if (!client->isVisible())
+            client->hideXClientIfInvisible();
+    }
+}
+
 void arrange(Monitor* m) {
     if (m) {
-        showhide(m->stack);
-    } else {
-        for (const auto& monitor : allMonitors) {
-            showhide(monitor->stack);
-        }
-    }
-    if (m) {
+        m->hideClientsIfInvisible();
         arrangemon(*m);
         restack(m);
     } else {
         for (const auto& monitor : allMonitors) {
+            monitor->hideClientsIfInvisible();
             arrangemon(*monitor);
         }
     }
@@ -1084,14 +1098,15 @@ void arrangemon(Monitor& m) {
         m.layout[m.sellt]->arrange(&m);
 }
 
-void attach(Client* c) {
-    c->next = c->fMonitor->clients;
-    c->fMonitor->clients = c;
+Client* attach(std::unique_ptr<Client> c) {
+    // TODO: use push_back instead of emulating the linked list
+    return c->fMonitor->clients
+        .insert(c->fMonitor->clients.begin(), std::move(c))
+        ->get();
 }
 
 void attachstack(Client* c) {
-    c->snext = c->fMonitor->stack;
-    c->fMonitor->stack = c;
+    c->fMonitor->stack.insert(c->fMonitor->stack.begin(), c);
 }
 
 void buttonpress(XEvent* e) {
@@ -1158,8 +1173,8 @@ void cleanup(void) {
     selmon->layout[selmon->sellt] = &foo;
 
     for (const auto& monitor : allMonitors) {
-        while (monitor->stack) {
-            unmanage(monitor->stack, false);
+        while (!monitor->stack.empty()) {
+            unmanage(monitor->stack.front(), false);
         }
     }
     XUngrabKey(dpy, AnyKey, AnyModifier, root);
@@ -1206,9 +1221,9 @@ void configurenotify(XEvent* e) {
             drw->resize(screenWidth, barHeight);
             updatebars();
             for (const auto& monitor : allMonitors) {
-                for (Client* c = monitor->clients; c; c = c->next) {
-                    if (c->getFlags().isFullscreen) {
-                        c->resizeXClient(monitor->sRect);
+                for (auto& client : monitor->clients) {
+                    if (client->getFlags().isFullscreen) {
+                        client->resizeXClient(monitor->sRect);
                     }
                 }
                 XMoveResizeWindow(dpy, monitor->barwin, monitor->wRect.x,
@@ -1256,26 +1271,22 @@ void destroynotify(XEvent* e) {
         unmanage(c, true);
 }
 
-void detach(Client* c) {
-    Client** tc;
-
-    for (tc = &c->fMonitor->clients; *tc && *tc != c; tc = &(*tc)->next)
-        ;
-    *tc = c->next;
+std::unique_ptr<Client> detach(Client* client) {
+    auto location = client->fMonitor->findClientLocation(client);
+    auto clientContainer = std::move(*location);
+    client->fMonitor->clients.erase(location);
+    return clientContainer;
 }
 
 void detachstack(Client* c) {
-    Client** tc;
-
-    for (tc = &c->fMonitor->stack; *tc && *tc != c; tc = &(*tc)->snext)
-        ;
-    *tc = c->snext;
-
+    c->fMonitor->stack.erase(std::ranges::find(c->fMonitor->stack, c));
     if (c == c->fMonitor->sel) {
-        Client* t;
-        for (t = c->fMonitor->stack; t && !t->isVisible(); t = t->snext)
-            ;
-        c->fMonitor->sel = t;
+        for (Client* client : c->fMonitor->stack) {
+            if (client->isVisible()) {
+                c->fMonitor->sel = client;
+                break;
+            }
+        }
     }
 }
 
@@ -1299,10 +1310,10 @@ void drawbar(const Monitor& m) {
         drw->renderText(m.wRect.width - tw, 0, tw, barHeight, 0, stext, 0);
     }
 
-    for (Client* c = m.clients; c; c = c->next) {
-        occ |= c->fTags;
-        if (c->getFlags().isUrgent)
-            urg |= c->fTags;
+    for (const auto& client : m.clients) {
+        occ |= client->fTags;
+        if (client->getFlags().isUrgent)
+            urg |= client->fTags;
     }
     int x = 0;
     for (size_t i = 0; i < tags.size(); i++) {
@@ -1370,9 +1381,14 @@ void expose(XEvent* e) {
 }
 
 void focus(Client* c) {
-    if (!c || !c->isVisible())
-        for (c = selmon->stack; c && !c->isVisible(); c = c->snext)
-            ;
+    if (!c || !c->isVisible()) {
+        for (Client* client : selmon->stack) {
+            if (client->isVisible()) {
+                c = client;
+                break;
+            }
+        }
+    }
     if (selmon->sel && selmon->sel != c)
         unfocus(selmon->sel, 0);
     if (c) {
@@ -1418,20 +1434,29 @@ void focusstack(const Arg* arg) {
     if (!selmon->sel || (selmon->sel->getFlags().isFullscreen & lockfullscreen))
         return;
     if (arg->i > 0) {
-        for (c = selmon->sel->next; c && !c->isVisible(); c = c->next)
-            ;
-        if (!c)
-            for (c = selmon->clients; c && !c->isVisible(); c = c->next)
-                ;
+        // TODO: regression: previously O(1) if selmon->sel was visible
+        for (auto client = ++selmon->findClientLocation(selmon->sel);
+             client != selmon->clients.end(); ++client) {
+            if ((*client)->isVisible()) {
+                c = client->get();
+                break;
+            }
+        }
+        if (!c) {
+            for (auto& client : selmon->clients) {
+                if (client->isVisible()) {
+                    c = client.get();
+                    break;
+                }
+            }
+        }
     } else {
-        Client* i;
-        for (i = selmon->clients; i != selmon->sel; i = i->next)
-            if (i->isVisible())
-                c = i;
-        if (!c)
-            for (; i; i = i->next)
-                if (i->isVisible())
-                    c = i;
+        for (auto& client : selmon->clients) {
+            if (selmon->sel == client.get() && c)
+                break;
+            if (client->isVisible())
+                c = client.get();
+        }
     }
     if (c) {
         focus(c);
@@ -1551,17 +1576,17 @@ void killclient(const Arg* arg) {
 }
 
 void manage(Window w, XWindowAttributes* wa) {
-    auto* client =
-        new Client{w, {wa->x, wa->y, wa->width, wa->height}, wa->border_width};
+    auto client = std::make_unique<Client>(
+        w, Rect{wa->x, wa->y, wa->width, wa->height}, wa->border_width);
 
-    attach(client);
-    attachstack(client);
+    auto clientPtr = attach(std::move(client));
+    attachstack(clientPtr);
 
-    if (client->fMonitor == selmon)
+    if (clientPtr->fMonitor == selmon)
         unfocus(selmon->sel, 0);
-    client->fMonitor->sel = client;
-    arrange(client->fMonitor);
-    XMapWindow(dpy, client->fWindow);
+    clientPtr->fMonitor->sel = clientPtr;
+    arrange(clientPtr->fMonitor);
+    XMapWindow(dpy, clientPtr->fWindow);
     focus(nullptr);
 }
 
@@ -1586,18 +1611,16 @@ void maprequest(XEvent* e) {
 }
 
 void monocle(Monitor* m) {
-    unsigned int n = 0;
-    Client* c;
-
-    for (c = m->clients; c; c = c->next)
-        if (c->isVisible())
-            n++;
+    int n = std::ranges::count_if(
+        m->clients, [](const auto& client) { return client->isVisible(); });
     if (n > 0) /* override layout symbol */
         snprintf(m->ltsymbol, sizeof m->ltsymbol, "[%d]", n);
-    for (c = nexttiled(m->clients); c; c = nexttiled(c->next))
-        c->resize(m->wRect.x, m->wRect.y,
-                  m->wRect.width - 2 * c->getBorderWidth(),
-                  m->wRect.height - 2 * c->getBorderWidth(), false);
+
+    for (auto& client : m->getTiledClients()) {
+        client->resize(m->wRect.x, m->wRect.y,
+                       m->wRect.width - 2 * client->getBorderWidth(),
+                       m->wRect.height - 2 * client->getBorderWidth(), false);
+    }
 }
 
 void motionnotify(XEvent* e) {
@@ -1625,17 +1648,10 @@ void movemouse(const Arg* arg) {
     }
 }
 
-Client* nexttiled(Client* c) {
-    for (; c && (c->getFlags().isFloating || !c->isVisible()); c = c->next)
-        ;
-    return c;
-}
-
-void pop(Client* c) {
-    detach(c);
-    attach(c);
-    focus(c);
-    arrange(c->fMonitor);
+void pop(Client* ptr) {
+    auto client = attach(detach(ptr));
+    focus(client);
+    arrange(client->fMonitor);
 }
 
 void propertynotify(XEvent* e) {
@@ -1674,27 +1690,26 @@ void resizemouse(const Arg* arg) {
 }
 
 void restack(Monitor* m) {
-    Client* c;
-    XEvent ev;
-    XWindowChanges wc;
-
     drawbar(*m);
     if (!m->sel)
         return;
     if (m->sel->getFlags().isFloating || !m->layout[m->sellt]->arrange)
         XRaiseWindow(dpy, m->sel->fWindow);
     if (m->layout[m->sellt]->arrange) {
+        XWindowChanges wc{};
         wc.stack_mode = Below;
         wc.sibling = m->barwin;
-        for (c = m->stack; c; c = c->snext)
+        for (const auto* c : m->stack) {
             if (!c->getFlags().isFloating && c->isVisible()) {
                 XConfigureWindow(dpy, c->fWindow, CWSibling | CWStackMode, &wc);
                 wc.sibling = c->fWindow;
             }
+        }
     }
+    XEvent ev{};
     XSync(dpy, False);
-    while (XCheckMaskEvent(dpy, EnterWindowMask, &ev))
-        ;
+    while (XCheckMaskEvent(dpy, EnterWindowMask, &ev)) {
+    }
 }
 
 void run(void) {
@@ -1735,14 +1750,14 @@ void sendmon(Client* c, Monitor* m) {
     if (c->fMonitor == m)
         return;
     unfocus(c, 1);
-    detach(c);
+    auto client = detach(c);
     detachstack(c);
     c->fMonitor = m;
     c->fTags = m->tagset[m->seltags]; /* assign tags of target monitor */
-    attach(c);
+    attach(std::move(client));
     attachstack(c);
-    focus(NULL);
-    arrange(NULL);
+    focus(nullptr);
+    arrange(nullptr);
 }
 
 void setlayout(const Arg* arg) {
@@ -1772,8 +1787,6 @@ void setmfact(const Arg* arg) {
 }
 
 void setup(void) {
-    static_assert(tags.size() < 32);
-
     XSetWindowAttributes wa;
     Atom utf8string;
 
@@ -1843,12 +1856,6 @@ void setup(void) {
     focus(NULL);
 }
 
-void showhide(Client* c) {
-    if (c) {
-        c->showHide();
-    }
-}
-
 void sigchld(int unused) {
     if (signal(SIGCHLD, sigchld) == SIG_ERR)
         die("can't install SIGCHLD handler:");
@@ -1885,11 +1892,8 @@ void tagmon(const Arg* arg) {
 }
 
 void tile(Monitor* m) {
-    Client* c;
-
-    int n;
-    for (n = 0, c = nexttiled(m->clients); c; c = nexttiled(c->next), n++)
-        ;
+    int n = std::ranges::count_if(m->getTiledClients(),
+                                  [](const auto&) { return true; });
     if (n == 0)
         return;
 
@@ -1899,9 +1903,8 @@ void tile(Monitor* m) {
     else
         mw = m->wRect.width - m->gappx;
 
-    int i, my, ty;
-    for (i = 0, my = ty = m->gappx, c = nexttiled(m->clients); c;
-         c = nexttiled(c->next), i++)
+    int i = 0, my = m->gappx, ty = m->gappx;
+    for (const auto& c : m->getTiledClients()) {
         if (i < m->nmaster) {
             auto h = (m->wRect.height - my) / (std::min(n, m->nmaster) - i) -
                      m->gappx;
@@ -1919,6 +1922,8 @@ void tile(Monitor* m) {
             if (ty + c->getOuterHeight() + m->gappx < m->wRect.height)
                 ty += c->getOuterHeight() + m->gappx;
         }
+        i++;
+    }
 }
 
 void togglebar(const Arg* arg) {
@@ -1972,16 +1977,15 @@ void unfocus(Client* c, int setfocus) {
     }
 }
 
-void unmanage(Client* c, bool destroyed) {
-    Monitor* m = c->fMonitor;
+void unmanage(Client* ptr, bool destroyed) {
+    Monitor* m = ptr->fMonitor;
 
-    detach(c);
-    detachstack(c);
+    auto client = detach(ptr);
+    detachstack(ptr);
     if (!destroyed)
-        c->unmanageAndDestroyX();
+        client->unmanageAndDestroyX();
 
-    delete c;
-    focus(NULL);
+    focus(nullptr);
     updateclientlist();
     arrange(m);
 }
@@ -2040,7 +2044,7 @@ void updatebarpos(Monitor& m) {
 void updateclientlist() {
     XDeleteProperty(dpy, root, netatom[NetClientList]);
     for (const auto& monitor : allMonitors) {
-        for (Client* c = monitor->clients; c; c = c->next) {
+        for (const auto& c : monitor->getTiledClients()) {
             XChangeProperty(dpy, root, netatom[NetClientList], XA_WINDOW, 32,
                             PropModeAppend, (unsigned char*)&(c->fWindow), 1);
         }
@@ -2086,20 +2090,21 @@ int updategeom(void) {
                 }
             }
         } else { /* less monitors available xMonitorCount < n */
+            auto* firstMonitor = allMonitors.front().get();
             for (int i = xMonitorCount; i < n; i++) {
                 auto& excessMonitor = allMonitors.back();
-                for (Client* client = excessMonitor->clients; client;
-                     client = excessMonitor->clients) {
+                while (excessMonitor->clients.size() > 0) {
                     dirty = true;
-                    excessMonitor->clients = client->next;
-                    detachstack(client);
 
-                    client->fMonitor = allMonitors.front().get();
-                    attach(client);
-                    attachstack(client);
+                    auto client = detach(excessMonitor->clients.front().get());
+                    detachstack(client.get());
+
+                    client->fMonitor = firstMonitor;
+                    attachstack(client.get());
+                    attach(std::move(client));
                 }
                 if (selmon == excessMonitor.get())
-                    selmon = allMonitors.front().get();
+                    selmon = firstMonitor;
 
                 allMonitors.pop_back();
             }
@@ -2158,12 +2163,12 @@ void view(const Arg* arg) {
 
 Client* wintoclient(Window w) {
     for (const auto& monitor : allMonitors) {
-        for (Client* c = monitor->clients; c; c = c->next) {
-            if (c->fWindow == w)
-                return c;
+        for (const auto& client : monitor->clients) {
+            if (client->fWindow == w)
+                return client.get();
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 Monitor* wintomon(Window w) {
@@ -2214,9 +2219,21 @@ void zoom(const Arg* arg) {
         return;
 
     Client* c = selmon->sel;
-    if (c == nexttiled(selmon->clients))
-        if (!c || !(c = nexttiled(c->next)))
+    if (!c)
+        return;
+
+    if (auto tiledClients = selmon->getTiledClients();
+        tiledClients && c == tiledClients.front().get()) {
+        // TODO: this is a complexity regression
+        auto nextTiledClient =
+            std::views::drop_while(tiledClients, [=](const auto& client) {
+                return client.get() != c;
+            });
+        if (!nextTiledClient)
             return;
+
+        c = nextTiledClient.front().get();
+    }
     pop(c);
 }
 
