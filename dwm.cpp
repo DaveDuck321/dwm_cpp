@@ -94,7 +94,7 @@ struct Button {
     uint click;
     uint mask;
     uint button;
-    void (*func)(const Arg* arg);
+    void (*func)(const Arg*);
     const Arg arg;
 };
 
@@ -239,43 +239,24 @@ void enternotify(XEvent* e);
 void expose(XEvent* e);
 void focus(Client* c);
 void focusin(XEvent* e);
-void focusmon(const Arg* arg);
-void focusstack(const Arg* arg);
 int getrootptr(int* x, int* y);
 long getstate(Window w);
 int gettextprop(Window w, Atom atom, char* text, uint size);
 void grabkeys();
-void incnmaster(const Arg* arg);
 void keypress(XEvent* e);
-void killclient(const Arg* arg);
 void manage(Window w, XWindowAttributes* wa);
 void mappingnotify(XEvent* e);
 void maprequest(XEvent* e);
-void monocle(Monitor* m);
 void motionnotify(XEvent* e);
-void movemouse(const Arg* arg);
 void pop(Client*);
 void propertynotify(XEvent* e);
-void quit(const Arg* arg);
 Monitor* recttomon(const Rect&);
-void resizemouse(const Arg* arg);
 void restack(Monitor* m);
 void run();
 void scan();
 void sendmon(Client* c, Monitor* m);
-void setgaps(const Arg* arg);
-void setlayout(const Arg* arg);
-void setmfact(const Arg* arg);
 void setup();
 void sigchld(int unused);
-void spawn(const Arg* arg);
-void tag(const Arg* arg);
-void tagmon(const Arg* arg);
-void tile(Monitor*);
-void togglebar(const Arg* arg);
-void togglefloating(const Arg* arg);
-void toggletag(const Arg* arg);
-void toggleview(const Arg* arg);
 void unfocus(Client* c, bool setfocus);
 void unmanage(Client* c, bool destroyed);
 void unmapnotify(XEvent* e);
@@ -285,13 +266,34 @@ void updateclientlist();
 int updategeom();
 void updatenumlockmask();
 void updatestatus();
-void view(const Arg* arg);
 Client* wintoclient(Window w);
 Monitor* wintomon(Window w);
 int xerror(Display* dpy, XErrorEvent* ee);
 int xerrordummy(Display* dpy, XErrorEvent* ee);
 int xerrorstart(Display* dpy, XErrorEvent* ee);
-void zoom(const Arg* arg);
+
+void monocle(Monitor*);
+void tile(Monitor*);
+
+void focusmon(const Arg*);
+void focusstack(const Arg*);
+void incnmaster(const Arg*);
+void killclient(const Arg*);
+void movemouse(const Arg*);
+void quit(const Arg*);
+void resizemouse(const Arg*);
+void setgaps(const Arg*);
+void setlayout(const Arg*);
+void setmfact(const Arg*);
+void spawn(const Arg*);
+void tag(const Arg*);
+void tagmon(const Arg*);
+void togglebar(const Arg*);
+void togglefloating(const Arg*);
+void toggletag(const Arg*);
+void toggleview(const Arg*);
+void view(const Arg*);
+void zoom(const Arg*);
 
 /* variables */
 // WORKAROUND: XClassHint expects a char*
@@ -1249,15 +1251,6 @@ void configurerequest(XEvent* e) {
     XSync(dpy, False);
 }
 
-void setgaps(const Arg* arg) {
-    if ((arg->i == 0) || (selmon->gappx + arg->i < 0)) {
-        selmon->gappx = 0;
-    } else {
-        selmon->gappx += arg->i;
-    }
-    arrange(selmon);
-}
-
 void destroynotify(XEvent* e) {
     Client* c;
     XDestroyWindowEvent* ev = &e->xdestroywindow;
@@ -1409,53 +1402,6 @@ void focusin(XEvent* e) {
         selmon->sel->setFocus();
 }
 
-void focusmon(const Arg* arg) {
-    if (allMonitors.size() <= 1)
-        return;
-
-    if (Monitor* m = dirtomon(arg->i); m != selmon) {
-        unfocus(selmon->sel, false);
-        selmon = m;
-        focus(nullptr);
-    }
-}
-
-void focusstack(const Arg* arg) {
-    if (!selmon->sel || (selmon->sel->getFlags().isFullscreen & lockfullscreen))
-        return;
-
-    Client* c = nullptr;
-    if (arg->i > 0) {
-        // TODO: regression: previously O(1) if selmon->sel was visible
-        for (auto client = ++selmon->findClientLocation(selmon->sel);
-             client != selmon->clients.end(); ++client) {
-            if ((*client)->isVisible()) {
-                c = client->get();
-                break;
-            }
-        }
-        if (!c) {
-            for (auto& client : selmon->clients) {
-                if (client->isVisible()) {
-                    c = client.get();
-                    break;
-                }
-            }
-        }
-    } else {
-        for (auto& client : selmon->clients) {
-            if (selmon->sel == client.get() && c)
-                break;
-            if (client->isVisible())
-                c = client.get();
-        }
-    }
-    if (c) {
-        focus(c);
-        restack(selmon);
-    }
-}
-
 int getrootptr(int* x, int* y) {
     int di;
     uint dui;
@@ -1521,11 +1467,6 @@ void grabkeys() {
     }
 }
 
-void incnmaster(const Arg* arg) {
-    selmon->nmaster = std::max(selmon->nmaster + arg->i, 0);
-    arrange(selmon);
-}
-
 #ifdef XINERAMA
 bool isuniquegeom(XineramaScreenInfo* unique, size_t n,
                   XineramaScreenInfo* info) {
@@ -1549,20 +1490,6 @@ void keypress(XEvent* e) {
             CLEANMASK(key.mod) == CLEANMASK(ev->state) && key.func) {
             key.func(&(key.arg));
         }
-    }
-}
-
-void killclient(const Arg* arg) {
-    if (!selmon->sel)
-        return;
-    if (!selmon->sel->sendXEvent(wmatom[WMDelete])) {
-        XGrabServer(dpy);
-        XSetErrorHandler(xerrordummy);
-        XSetCloseDownMode(dpy, DestroyAll);
-        XKillClient(dpy, selmon->sel->fWindow);
-        XSync(dpy, False);
-        XSetErrorHandler(xerror);
-        XUngrabServer(dpy);
     }
 }
 
@@ -1629,16 +1556,6 @@ void motionnotify(XEvent* e) {
     mon = m;
 }
 
-void movemouse(const Arg* arg) {
-    if (Client* client = selmon->sel; client) {
-        if (client->getFlags().isFullscreen)
-            return; /* no support moving fullscreen windows by mouse */
-
-        restack(selmon);
-        client->moveWithMouse();
-    }
-}
-
 void pop(Client* ptr) {
     auto client = attach(detach(ptr));
     focus(client);
@@ -1656,8 +1573,6 @@ void propertynotify(XEvent* e) {
     }
 }
 
-void quit(const Arg* arg) { running = 0; }
-
 Monitor* recttomon(const Rect& rect) {
     Monitor* r = selmon;
     int area = 0;
@@ -1668,16 +1583,6 @@ Monitor* recttomon(const Rect& rect) {
         }
     }
     return r;
-}
-
-void resizemouse(const Arg* arg) {
-    if (Client* client = selmon->sel; client) {
-        if (client->getFlags().isFullscreen)
-            return; /* no support resizing fullscreen windows by mouse */
-
-        restack(selmon);
-        client->resizeWithMouse();
-    }
 }
 
 void restack(Monitor* m) {
@@ -1748,30 +1653,6 @@ void sendmon(Client* c, Monitor* m) {
     attachstack(c);
     focus(nullptr);
     arrange(nullptr);
-}
-
-void setlayout(const Arg* arg) {
-    if (!arg || !arg->v || arg->v != selmon->layout[selmon->sellt])
-        selmon->sellt ^= 1;
-    if (arg && arg->v)
-        selmon->layout[selmon->sellt] = (Layout*)arg->v;
-    strncpy(selmon->ltsymbol, selmon->layout[selmon->sellt]->symbol,
-            sizeof selmon->ltsymbol);
-    if (selmon->sel)
-        arrange(selmon);
-    else
-        drawbar(*selmon);
-}
-
-/* arg > 1.0 will set mfact absolutely */
-void setmfact(const Arg* arg) {
-    if (!arg || !selmon->layout[selmon->sellt]->arrange)
-        return;
-    auto f = arg->f < 1.0 ? arg->f + selmon->mfact : arg->f - 1.0;
-    if (f < 0.05 || f > 0.95)
-        return;
-    selmon->mfact = f;
-    arrange(selmon);
 }
 
 void setup() {
@@ -1851,34 +1732,6 @@ void sigchld(int unused) {
     }
 }
 
-void spawn(const Arg* arg) {
-    if (arg->v == dmenucmd)
-        dmenumon[0] = '0' + selmon->num;
-    if (fork() == 0) {
-        if (dpy)
-            close(ConnectionNumber(dpy));
-        setsid();
-        execvp(((char**)arg->v)[0], (char**)arg->v);
-        fprintf(stderr, "dwm: execvp %s", ((char**)arg->v)[0]);
-        perror(" failed");
-        exit(EXIT_SUCCESS);
-    }
-}
-
-void tag(const Arg* arg) {
-    if (selmon->sel && arg->ui & TAGMASK) {
-        selmon->sel->fTags = arg->ui & TAGMASK;
-        focus(nullptr);
-        arrange(selmon);
-    }
-}
-
-void tagmon(const Arg* arg) {
-    if (!selmon->sel || allMonitors.size() <= 1)
-        return;
-    sendmon(selmon->sel, dirtomon(arg->i));
-}
-
 void tile(Monitor* m) {
     int n = std::ranges::count_if(m->getTiledClients(),
                                   [](const auto&) { return true; });
@@ -1911,43 +1764,6 @@ void tile(Monitor* m) {
                 ty += c->getOuterHeight() + m->gappx;
         }
         i++;
-    }
-}
-
-void togglebar(const Arg* arg) {
-    selmon->showbar = !selmon->showbar;
-    updatebarpos(*selmon);
-    XMoveResizeWindow(dpy, selmon->barwin, selmon->wRect.x, selmon->by,
-                      selmon->wRect.width, barHeight);
-    arrange(selmon);
-}
-
-void togglefloating(const Arg* arg) {
-    if (selmon->sel) {
-        selmon->sel->toggleFloating();
-        arrange(selmon);
-    }
-}
-
-void toggletag(const Arg* arg) {
-    if (!selmon->sel)
-        return;
-
-    auto newtags = selmon->sel->fTags ^ (arg->ui & TAGMASK);
-    if (newtags) {
-        selmon->sel->fTags = newtags;
-        focus(nullptr);
-        arrange(selmon);
-    }
-}
-
-void toggleview(const Arg* arg) {
-    uint newtagset = selmon->tagset[selmon->seltags] ^ (arg->ui & TAGMASK);
-
-    if (newtagset) {
-        selmon->tagset[selmon->seltags] = newtagset;
-        focus(nullptr);
-        arrange(selmon);
     }
 }
 
@@ -2135,16 +1951,6 @@ void updatestatus() {
     drawbar(*selmon);
 }
 
-void view(const Arg* arg) {
-    if ((arg->ui & TAGMASK) == selmon->tagset[selmon->seltags])
-        return;
-    selmon->seltags ^= 1; /* toggle sel tagset */
-    if (arg->ui & TAGMASK)
-        selmon->tagset[selmon->seltags] = arg->ui & TAGMASK;
-    focus(nullptr);
-    arrange(selmon);
-}
-
 Client* wintoclient(Window w) {
     for (const auto& monitor : allMonitors) {
         for (const auto& client : monitor->clients) {
@@ -2195,6 +2001,202 @@ int xerrordummy(Display* dpy, XErrorEvent* ee) { return 0; }
 int xerrorstart(Display* dpy, XErrorEvent* ee) {
     die("dwm: another window manager is already running");
     return -1;
+}
+
+void setgaps(const Arg* arg) {
+    if ((arg->i == 0) || (selmon->gappx + arg->i < 0)) {
+        selmon->gappx = 0;
+    } else {
+        selmon->gappx += arg->i;
+    }
+    arrange(selmon);
+}
+
+void focusmon(const Arg* arg) {
+    if (allMonitors.size() <= 1)
+        return;
+
+    if (Monitor* m = dirtomon(arg->i); m != selmon) {
+        unfocus(selmon->sel, false);
+        selmon = m;
+        focus(nullptr);
+    }
+}
+
+void focusstack(const Arg* arg) {
+    if (!selmon->sel || (selmon->sel->getFlags().isFullscreen & lockfullscreen))
+        return;
+
+    Client* c = nullptr;
+    if (arg->i > 0) {
+        // TODO: regression: previously O(1) if selmon->sel was visible
+        for (auto client = ++selmon->findClientLocation(selmon->sel);
+             client != selmon->clients.end(); ++client) {
+            if ((*client)->isVisible()) {
+                c = client->get();
+                break;
+            }
+        }
+        if (!c) {
+            for (auto& client : selmon->clients) {
+                if (client->isVisible()) {
+                    c = client.get();
+                    break;
+                }
+            }
+        }
+    } else {
+        for (auto& client : selmon->clients) {
+            if (selmon->sel == client.get() && c)
+                break;
+            if (client->isVisible())
+                c = client.get();
+        }
+    }
+    if (c) {
+        focus(c);
+        restack(selmon);
+    }
+}
+
+void incnmaster(const Arg* arg) {
+    selmon->nmaster = std::max(selmon->nmaster + arg->i, 0);
+    arrange(selmon);
+}
+
+void killclient(const Arg* arg) {
+    if (!selmon->sel)
+        return;
+    if (!selmon->sel->sendXEvent(wmatom[WMDelete])) {
+        XGrabServer(dpy);
+        XSetErrorHandler(xerrordummy);
+        XSetCloseDownMode(dpy, DestroyAll);
+        XKillClient(dpy, selmon->sel->fWindow);
+        XSync(dpy, False);
+        XSetErrorHandler(xerror);
+        XUngrabServer(dpy);
+    }
+}
+
+void movemouse(const Arg* arg) {
+    if (Client* client = selmon->sel; client) {
+        if (client->getFlags().isFullscreen)
+            return; /* no support moving fullscreen windows by mouse */
+
+        restack(selmon);
+        client->moveWithMouse();
+    }
+}
+
+void quit(const Arg* arg) { running = 0; }
+
+void resizemouse(const Arg* arg) {
+    if (Client* client = selmon->sel; client) {
+        if (client->getFlags().isFullscreen)
+            return; /* no support resizing fullscreen windows by mouse */
+
+        restack(selmon);
+        client->resizeWithMouse();
+    }
+}
+
+void setlayout(const Arg* arg) {
+    if (!arg || !arg->v || arg->v != selmon->layout[selmon->sellt])
+        selmon->sellt ^= 1;
+    if (arg && arg->v)
+        selmon->layout[selmon->sellt] = (Layout*)arg->v;
+    strncpy(selmon->ltsymbol, selmon->layout[selmon->sellt]->symbol,
+            sizeof selmon->ltsymbol);
+    if (selmon->sel)
+        arrange(selmon);
+    else
+        drawbar(*selmon);
+}
+
+/* arg > 1.0 will set mfact absolutely */
+void setmfact(const Arg* arg) {
+    if (!arg || !selmon->layout[selmon->sellt]->arrange)
+        return;
+    auto f = arg->f < 1.0 ? arg->f + selmon->mfact : arg->f - 1.0;
+    if (f < 0.05 || f > 0.95)
+        return;
+    selmon->mfact = f;
+    arrange(selmon);
+}
+
+void spawn(const Arg* arg) {
+    if (arg->v == dmenucmd)
+        dmenumon[0] = '0' + selmon->num;
+    if (fork() == 0) {
+        if (dpy)
+            close(ConnectionNumber(dpy));
+        setsid();
+        execvp(((char**)arg->v)[0], (char**)arg->v);
+        fprintf(stderr, "dwm: execvp %s", ((char**)arg->v)[0]);
+        perror(" failed");
+        exit(EXIT_SUCCESS);
+    }
+}
+
+void tag(const Arg* arg) {
+    if (selmon->sel && arg->ui & TAGMASK) {
+        selmon->sel->fTags = arg->ui & TAGMASK;
+        focus(nullptr);
+        arrange(selmon);
+    }
+}
+
+void tagmon(const Arg* arg) {
+    if (!selmon->sel || allMonitors.size() <= 1)
+        return;
+    sendmon(selmon->sel, dirtomon(arg->i));
+}
+
+void togglebar(const Arg* arg) {
+    selmon->showbar = !selmon->showbar;
+    updatebarpos(*selmon);
+    XMoveResizeWindow(dpy, selmon->barwin, selmon->wRect.x, selmon->by,
+                      selmon->wRect.width, barHeight);
+    arrange(selmon);
+}
+
+void togglefloating(const Arg* arg) {
+    if (selmon->sel) {
+        selmon->sel->toggleFloating();
+        arrange(selmon);
+    }
+}
+
+void toggletag(const Arg* arg) {
+    if (!selmon->sel)
+        return;
+
+    auto newtags = selmon->sel->fTags ^ (arg->ui & TAGMASK);
+    if (newtags) {
+        selmon->sel->fTags = newtags;
+        focus(nullptr);
+        arrange(selmon);
+    }
+}
+
+void toggleview(const Arg* arg) {
+    uint newtagset = selmon->tagset[selmon->seltags] ^ (arg->ui & TAGMASK);
+
+    if (newtagset) {
+        selmon->tagset[selmon->seltags] = newtagset;
+        focus(nullptr);
+        arrange(selmon);
+    }
+}
+
+void view(const Arg* arg) {
+    if ((arg->ui & TAGMASK) == selmon->tagset[selmon->seltags])
+        return;
+    selmon->seltags ^= 1; /* toggle sel tagset */
+    if (arg->ui & TAGMASK)
+        selmon->tagset[selmon->seltags] = arg->ui & TAGMASK;
+    focus(nullptr);
+    arrange(selmon);
 }
 
 void zoom(const Arg* arg) {
