@@ -1,5 +1,5 @@
 # dwm version
-VERSION = 6.2
+VERSION = 0.6.2
 
 # Customize below to fit your system
 
@@ -23,7 +23,7 @@ INCS = -I${X11INC} -I${FREETYPEINC}
 LIBS = -lstdc++ -L${X11LIB} -lX11 ${XINERAMALIBS} ${FREETYPELIBS}
 
 # flags
-CXXFLAGS = -std=c++20 -Wpedantic -Wall -Wextra -Wno-deprecated-declarations -Wno-unused-parameter ${INCS} -D_DEFAULT_SOURCE -DVERSION=\"${VERSION}\" ${XINERAMAFLAGS}
+CXXFLAGS = -std=c++20 -Wpedantic -Wall -Wextra -Wno-deprecated-declarations ${INCS} -D_DEFAULT_SOURCE -DVERSION=\"${VERSION}\" ${XINERAMAFLAGS}
 LDFLAGS  = ${LIBS}
 
 DEBUG_CXXFLAGS = -fsanitize=address,undefined -g -Og
