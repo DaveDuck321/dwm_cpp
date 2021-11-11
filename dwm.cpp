@@ -37,6 +37,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -83,19 +84,11 @@ enum {
     ClkLast
 }; /* clicks */
 
-union Arg {
-    int i;
-    uint ui;
-    float f;
-    const void* v;
-};
-
 struct Button {
     uint click;
     uint mask;
     uint button;
-    void (*func)(const Arg*);
-    const Arg arg;
+    std::function<void(uint)> action;
 };
 
 typedef class Monitor Monitor;
@@ -173,8 +166,7 @@ class Client {
 struct Key {
     uint mod;
     KeySym keysym;
-    void (*func)(const Arg*);
-    const Arg arg;
+    std::function<void()> func;
 };
 
 struct Layout {
@@ -298,25 +290,26 @@ int xerrorstart(Display* dpy, XErrorEvent* ee);
 void monocle(Monitor*);
 void tile(Monitor*);
 
-void focusmon(const Arg*);
-void focusstack(const Arg*);
-void incnmaster(const Arg*);
-void killclient(const Arg*);
-void movemouse(const Arg*);
-void quit(const Arg*);
-void resizemouse(const Arg*);
-void setgaps(const Arg*);
-void setlayout(const Arg*);
-void setmfact(const Arg*);
-void spawn(const Arg*);
-void tag(const Arg*);
-void tagmon(const Arg*);
-void togglebar(const Arg*);
-void togglefloating(const Arg*);
-void toggletag(const Arg*);
-void toggleview(const Arg*);
-void view(const Arg*);
-void zoom(const Arg*);
+void setgaps(const int inc);
+void focusmon(const int dir);
+void focusstack(const int dir);
+void incnmaster(const int dir);
+void killclient();
+void movemouse();
+void quit();
+void resizemouse();
+void setlayout(const Layout* layout);
+void setmfact(const float factor);
+void spawn(const char** command);
+void tag(const uint tag);
+void tagmon(const int dir);
+void togglebar();
+void togglefloating();
+void togglelayout();
+void toggletag(const uint tag);
+void toggleview(const uint tag);
+void view(const uint tag);
+void zoom();
 
 /* variables */
 // WORKAROUND: XClassHint expects a char*
@@ -600,7 +593,7 @@ void Client::resizeWithMouse() {
                 if (!fFlags.isFloating && selmon->getActiveLayout()->arrange &&
                     (std::abs(newWidth - fSize.width) > snap ||
                      std::abs(newHeight - fSize.height) > snap)) {
-                    togglefloating(nullptr);
+                    togglefloating();
                 }
             }
             if (!selmon->getActiveLayout()->arrange || fFlags.isFloating)
@@ -675,7 +668,7 @@ void Client::moveWithMouse() {
             if (!fFlags.isFloating && selmon->getActiveLayout()->arrange &&
                 (std::abs(newX - fSize.x) > snap ||
                  std::abs(newY - fSize.y) > snap)) {
-                togglefloating(nullptr);
+                togglefloating();
             }
             if (!selmon->getActiveLayout()->arrange || fFlags.isFloating)
                 resize(newX, newY, fSize.width, fSize.height, true);
@@ -1084,8 +1077,12 @@ Monitor::~Monitor() {
     // TODO: improve this performance hack from original dwm
     Layout emptyLayout = {"", nullptr};
     fLayouts[fSelectedTags] = &emptyLayout;
-    while (!fStack.empty())
-        unmanage(fStack.front(), false);
+    while (!fStack.empty()) {
+        auto client = detach(fStack.front());
+        client->unmanageAndDestroyX();
+        XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
+        XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
+    }
     XUnmapWindow(dpy, fBarID);
     XDestroyWindow(dpy, fBarID);
 }
@@ -1466,7 +1463,7 @@ void buttonpress(XEvent* e) {
         selmon->focus();
     }
 
-    Arg arg = {0};
+    uint clickedTag = 0u;
     auto click = ClkRootWin;
     if (ev->window == selmon->fBarID) {
         int x = 0;
@@ -1476,7 +1473,7 @@ void buttonpress(XEvent* e) {
         } while (ev->x >= x && ++i < tags.size());
         if (i < tags.size()) {
             click = ClkTagBar;
-            arg.ui = 1 << i;
+            clickedTag = 1 << i;
         } else if (ev->x < x + blw) {
             click = ClkLtSymbol;
         } else if (ev->x >
@@ -1492,11 +1489,9 @@ void buttonpress(XEvent* e) {
         click = ClkClientWin;
     }
     for (const auto& button : buttons) {
-        if (click == button.click && button.func &&
-            button.button == ev->button &&
+        if (click == button.click && button.button == ev->button &&
             CLEANMASK(button.mask) == CLEANMASK(ev->state)) {
-            button.func(click == ClkTagBar && button.arg.i == 0 ? &arg
-                                                                : &button.arg);
+            button.action(click == ClkTagBar ? clickedTag : 0u);
         }
     }
 }
@@ -1511,12 +1506,13 @@ void checkotherwm() {
 }
 
 void cleanup() {
-    Arg a = {.ui = ~0u};
-    view(&a);
+    view(~0u);
     XUngrabKey(dpy, AnyKey, AnyModifier, root);
     allMonitors.clear();
+    XDeleteProperty(dpy, root, netatom[NetClientList]);
 
     XDestroyWindow(dpy, wmcheckwin);
+    cursors.reset();
     delete drw; // TODO: this should be a unique pointer
     XSync(dpy, False);
     XSetInputFocus(dpy, PointerRoot, RevertToPointerRoot, CurrentTime);
@@ -1717,8 +1713,8 @@ void keypress(XEvent* e) {
     const auto keysym = XKeycodeToKeysym(dpy, (KeyCode)ev->keycode, 0);
     for (const auto& key : keys) {
         if (keysym == key.keysym &&
-            CLEANMASK(key.mod) == CLEANMASK(ev->state) && key.func) {
-            key.func(&(key.arg));
+            CLEANMASK(key.mod) == CLEANMASK(ev->state)) {
+            key.func();
         }
     }
 }
@@ -2113,36 +2109,36 @@ int xerrorstart(Display* dpy, XErrorEvent* ee) {
     return -1;
 }
 
-void setgaps(const Arg* arg) {
-    if ((arg->i == 0) || (selmon->fGapSize + arg->i < 0)) {
+void setgaps(const int inc) {
+    if ((inc == 0) || (selmon->fGapSize + inc < 0)) {
         selmon->fGapSize = 0;
     } else {
-        selmon->fGapSize += arg->i;
+        selmon->fGapSize += inc;
     }
     selmon->arrangeClients();
 }
 
-void focusmon(const Arg* arg) {
+void focusmon(const int dir) {
     if (allMonitors.size() <= 1)
         return;
 
-    if (Monitor* m = dirtomon(arg->i); m != selmon) {
+    if (Monitor* m = dirtomon(dir); m != selmon) {
         unfocus(selmon->fSelected, false);
         selmon = m;
         selmon->focus();
     }
 }
 
-void focusstack(const Arg* arg) { selmon->shiftFocusThroughStack(arg->i); }
+void focusstack(const int dir) { selmon->shiftFocusThroughStack(dir); }
 
-void incnmaster(const Arg* arg) { selmon->incrementMasterCount(arg->i); }
+void incnmaster(const int dir) { selmon->incrementMasterCount(dir); }
 
-void killclient(const Arg* arg) {
+void killclient() {
     if (selmon->fSelected)
         selmon->fSelected->requestKill();
 }
 
-void movemouse(const Arg* arg) {
+void movemouse() {
     if (Client* client = selmon->fSelected; client) {
         if (client->getFlags().isFullscreen)
             return; /* no support moving fullscreen windows by mouse */
@@ -2152,9 +2148,9 @@ void movemouse(const Arg* arg) {
     }
 }
 
-void quit(const Arg* arg) { running = 0; }
+void quit() { running = 0; }
 
-void resizemouse(const Arg* arg) {
+void resizemouse() {
     if (Client* client = selmon->fSelected; client) {
         if (client->getFlags().isFullscreen)
             return; /* no support resizing fullscreen windows by mouse */
@@ -2164,61 +2160,63 @@ void resizemouse(const Arg* arg) {
     }
 }
 
-void setlayout(const Arg* arg) {
-    if (!arg || !arg->v || arg->v != selmon->getActiveLayout())
+void setlayout(const Layout* layout) {
+    if (!layout || layout != selmon->getActiveLayout())
         selmon->toggleSelectedLayout();
-    if (arg)
-        selmon->setActiveLayout((Layout*)arg->v);
-    else // TODO: this might not be necessary
-        selmon->setActiveLayout(nullptr);
+    selmon->setActiveLayout(layout);
 }
 
-void setmfact(const Arg* arg) {
-    if (arg && !selmon->getActiveLayout()->arrange)
-        selmon->incrementMasterFactor(arg->f);
+void setmfact(const float factor) {
+    if (!selmon->getActiveLayout()->arrange)
+        selmon->incrementMasterFactor(factor);
 }
 
-void spawn(const Arg* arg) {
-    if (arg->v == dmenucmd)
+void spawn(const char* command[]) {
+    if (command == dmenucmd)
         dmenumon[0] = '0' + selmon->getMonitorNumber();
     if (fork() == 0) {
         if (dpy)
             close(ConnectionNumber(dpy));
         setsid();
-        execvp(((char**)arg->v)[0], (char**)arg->v);
-        fprintf(stderr, "dwm++: execvp %s", ((char**)arg->v)[0]);
+        execvp(command[0], const_cast<char* const*>(command));
+        fprintf(stderr, "dwm++: execvp %s", command[0]);
         perror(" failed");
         exit(EXIT_SUCCESS);
     }
 }
 
-void tag(const Arg* arg) {
-    if (selmon->fSelected && arg->ui & TAGMASK) {
-        selmon->fSelected->fTags = arg->ui & TAGMASK;
+void tag(const uint tag) {
+    if (selmon->fSelected && tag & TAGMASK) {
+        selmon->fSelected->fTags = tag & TAGMASK;
         selmon->focus();
         selmon->arrangeClients();
     }
 }
 
-void tagmon(const Arg* arg) {
+void tagmon(const int dir) {
     if (selmon->fSelected && allMonitors.size() > 1)
-        sendmon(selmon->fSelected, dirtomon(arg->i));
+        sendmon(selmon->fSelected, dirtomon(dir));
 }
 
-void togglebar(const Arg* arg) { selmon->toggleBarRendering(); }
+void togglebar() { selmon->toggleBarRendering(); }
 
-void togglefloating(const Arg* arg) {
+void togglefloating() {
     if (selmon->fSelected) {
         selmon->fSelected->toggleFloating();
         selmon->arrangeClients();
     }
 }
 
-void toggletag(const Arg* arg) {
+void togglelayout() {
+    selmon->toggleSelectedLayout();
+    selmon->setActiveLayout(nullptr);
+}
+
+void toggletag(const uint tag) {
     if (!selmon->fSelected)
         return;
 
-    auto newtags = selmon->fSelected->fTags ^ (arg->ui & TAGMASK);
+    auto newtags = selmon->fSelected->fTags ^ (tag & TAGMASK);
     if (newtags) {
         selmon->fSelected->fTags = newtags;
         selmon->focus();
@@ -2226,8 +2224,8 @@ void toggletag(const Arg* arg) {
     }
 }
 
-void toggleview(const Arg* arg) {
-    uint newtagset = selmon->getActiveTags() ^ (arg->ui & TAGMASK);
+void toggleview(const uint tag) {
+    uint newtagset = selmon->getActiveTags() ^ (tag & TAGMASK);
     if (newtagset) {
         selmon->setActiveTags(newtagset);
         selmon->focus();
@@ -2235,17 +2233,17 @@ void toggleview(const Arg* arg) {
     }
 }
 
-void view(const Arg* arg) {
-    if ((arg->ui & TAGMASK) == selmon->getActiveTags())
+void view(const uint tag) {
+    if ((tag & TAGMASK) == selmon->getActiveTags())
         return;
     selmon->toggleSelectedTagSet();
-    if (arg->ui & TAGMASK)
-        selmon->setActiveTags(arg->ui & TAGMASK);
+    if (tag & TAGMASK)
+        selmon->setActiveTags(tag & TAGMASK);
     selmon->focus();
     selmon->arrangeClients();
 }
 
-void zoom(const Arg* arg) {
+void zoom() {
     if (selmon->fSelected)
         selmon->zoomClientToMaster(selmon->fSelected);
 }
