@@ -23,6 +23,7 @@
 
 #include "drw.hpp"
 #include "util.hpp"
+#include "x.hpp"
 
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
@@ -54,19 +55,6 @@
 #define TAGMASK ((1 << tags.size()) - 1)
 
 namespace {
-/* enums */
-enum {
-    NetSupported,
-    NetWMName,
-    NetWMState,
-    NetWMCheck,
-    NetWMFullscreen,
-    NetActiveWindow,
-    NetWMWindowType,
-    NetWMWindowTypeDialog,
-    NetClientList,
-    NetLast
-}; /* EWMH atoms */
 enum {
     WMProtocols,
     WMDelete,
@@ -74,6 +62,14 @@ enum {
     WMTakeFocus,
     WMLast
 }; /* default atoms */
+
+struct Net_Properties {
+    MutableXPropertyWithCleanup<XA_WINDOW> activeWindow, clientList;
+    XProperty<XA_TEXT> wmName;
+    XProperty<XA_ATOM> wmState;
+    XSentinel wmFullscreen, wmWindowType, wmWindowTypeDialog;
+};
+
 enum {
     ClkTagBar,
     ClkLtSymbol,
@@ -179,6 +175,9 @@ class Client {
     int fMaxWidth, fMaxHeight;
     int fMinWidth, fMinHeight;
     int fBorderWidth, fOldBorderWidth;
+
+    MutableTextXProperty fXName;
+    MutableXProperty<XA_ATOM> fXState;
 };
 
 class Monitor {
@@ -271,7 +270,7 @@ void view(const uint tag);
 void zoom();
 
 /* variables */
-char dwmClassHint[] = {'d', 'w', 'm', '\0'};
+char dwmClassHint[] = {'d', 'w', 'm', '+', '+', '\0'};
 const char broken[] = "broken";
 char stext[256];
 int screen;
@@ -279,8 +278,9 @@ int screenWidth, screenHeight; /* X display screen geometry width, height */
 int barHeight, blw = 0;        /* bar geometry */
 int lrpad;                     /* sum of left and right padding for text */
 int (*xerrorxlib)(Display*, XErrorEvent*);
+std::unique_ptr<Net_Properties> netatom;
 uint numlockmask = 0;
-Atom wmatom[WMLast], netatom[NetLast];
+Atom wmatom[WMLast];
 int running = 1;
 std::optional<CursorTheme> cursors;
 std::optional<Theme<XColorScheme>> scheme;
@@ -584,7 +584,7 @@ void unfocus(Client* c, bool setfocus) {
     XSetWindowBorder(dpy, c->fWindow, scheme->normal.border.pixel);
     if (setfocus) {
         XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
-        XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
+        netatom->activeWindow.erase();
     }
 }
 
@@ -631,14 +631,15 @@ void updateStatusBarMessage() {
 }
 
 void updateAllXClientLists() {
-    XDeleteProperty(dpy, root, netatom[NetClientList]);
+    netatom->clientList.erase();
     for (const auto& monitor : allMonitors)
         monitor->updateXClientList();
 }
 
 Client::Client(Window win, const Rect& clientRect, int borderWidth)
     : fWindow{win}, fSize{clientRect}, fOldSize{clientRect},
-      fBorderWidth{borderpx}, fOldBorderWidth{borderWidth} {
+      fBorderWidth{borderpx}, fOldBorderWidth{borderWidth},
+      fXName{win, netatom->wmName}, fXState{win, netatom->wmState} {
 
     updateWindowTitleFromX();
 
@@ -686,8 +687,7 @@ Client::Client(Window win, const Rect& clientRect, int borderWidth)
     if (fFlags.isFloating)
         XRaiseWindow(dpy, fWindow);
 
-    XChangeProperty(dpy, root, netatom[NetClientList], XA_WINDOW, 32,
-                    PropModeAppend, (unsigned char*)&(fWindow), 1);
+    netatom->clientList.append(fWindow);
     XMoveResizeWindow(dpy, fWindow, fSize.x + 2 * screenWidth, fSize.y,
                       fSize.width, fSize.height);
     setState(NormalState);
@@ -946,10 +946,7 @@ void Client::hideXClientIfInvisible() {
 }
 
 void Client::setState(long state) const {
-    long data[] = {state, None};
-
-    XChangeProperty(dpy, fWindow, wmatom[WMState], wmatom[WMState], 32,
-                    PropModeReplace, (unsigned char*)data, 2);
+    fXState.overwrite({state, None}, fXState);
 }
 
 void Client::setUrgent(bool urgent) {
@@ -966,17 +963,14 @@ void Client::setUrgent(bool urgent) {
 void Client::setFocus() const {
     if (!fFlags.neverFocus) {
         XSetInputFocus(dpy, fWindow, RevertToPointerRoot, CurrentTime);
-        XChangeProperty(dpy, root, netatom[NetActiveWindow], XA_WINDOW, 32,
-                        PropModeReplace, (unsigned char*)&(fWindow), 1);
+        netatom->activeWindow.overwrite({fWindow});
     }
     sendXEvent(wmatom[WMTakeFocus]);
 }
 
 void Client::setFullscreen(const bool fullscreen) {
     if (fullscreen && !fFlags.isFullscreen) {
-        XChangeProperty(dpy, fWindow, netatom[NetWMState], XA_ATOM, 32,
-                        PropModeReplace,
-                        (unsigned char*)&netatom[NetWMFullscreen], 1);
+        fXState.overwrite({static_cast<Atom>(netatom->wmFullscreen)});
         fFlags.wasPreviouslyFloating = fFlags.isFloating;
         fFlags.isFullscreen = true;
         fFlags.isFloating = true;
@@ -986,8 +980,7 @@ void Client::setFullscreen(const bool fullscreen) {
         resizeXClient(fMonitor->sRect);
         XRaiseWindow(dpy, fWindow);
     } else if (!fullscreen && fFlags.isFullscreen) {
-        XChangeProperty(dpy, fWindow, netatom[NetWMState], XA_ATOM, 32,
-                        PropModeReplace, (unsigned char*)0, 0);
+        fXState.overwriteWithNullValue();
         fFlags.isFullscreen = false;
         fFlags.isFloating = fFlags.wasPreviouslyFloating;
         fSize = fOldSize;
@@ -1029,12 +1022,12 @@ void Client::updatePropertyFromEvent(Atom property) {
     default:
         break;
     }
-    if (property == XA_WM_NAME || property == netatom[NetWMName]) {
+    if (property == XA_WM_NAME || property == netatom->wmName) {
         updateWindowTitleFromX();
         if (this == fMonitor->fSelected)
             fMonitor->drawbar();
     }
-    if (property == netatom[NetWMWindowType])
+    if (property == netatom->wmWindowType)
         updateWindowTypeFromX();
 }
 
@@ -1207,8 +1200,7 @@ void Client::sendXWindowConfiguration() const {
 }
 
 void Client::updateWindowTitleFromX() {
-    if (!getXTextProperties(fWindow, netatom[NetWMName], fName,
-                            sizeof(fName))) {
+    if (!getXTextProperties(fWindow, netatom->wmName, fName, sizeof(fName))) {
         getXTextProperties(fWindow, XA_WM_NAME, fName, sizeof(fName));
     }
     if (fName[0] == '\0') /* hack to mark broken clients */
@@ -1216,12 +1208,12 @@ void Client::updateWindowTitleFromX() {
 }
 
 void Client::updateWindowTypeFromX() {
-    Atom state = getXAtomProperty(fWindow, netatom[NetWMState]);
-    Atom wtype = getXAtomProperty(fWindow, netatom[NetWMWindowType]);
+    Atom state = getXAtomProperty(fWindow, netatom->wmState);
+    Atom wtype = getXAtomProperty(fWindow, netatom->wmWindowType);
 
-    if (state == netatom[NetWMFullscreen])
+    if (state == netatom->wmFullscreen)
         setFullscreen(true);
-    if (wtype == netatom[NetWMWindowTypeDialog])
+    if (wtype == netatom->wmWindowTypeDialog)
         fFlags.isFloating = true;
 }
 
@@ -1312,7 +1304,7 @@ Monitor::~Monitor() {
         auto client = detach(fStack.front());
         client->unmanageAndDestroyX();
         XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
-        XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
+        netatom->activeWindow.erase();
     }
     XUnmapWindow(dpy, fBarID);
     XDestroyWindow(dpy, fBarID);
@@ -1450,7 +1442,7 @@ void Monitor::focus(Client* client) {
         client->setFocus();
     } else {
         XSetInputFocus(dpy, root, RevertToPointerRoot, CurrentTime);
-        XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
+        netatom->activeWindow.erase();
     }
     fSelected = client;
     drawbars();
@@ -1623,10 +1615,8 @@ void Monitor::toggleBarRendering() {
 }
 
 void Monitor::updateXClientList() const {
-    for (const auto& client : getTiledClients()) {
-        XChangeProperty(dpy, root, netatom[NetClientList], XA_WINDOW, 32,
-                        PropModeAppend, (unsigned char*)&(client->fWindow), 1);
-    }
+    for (const auto& client : getTiledClients())
+        netatom->clientList.append(client->fWindow);
 }
 
 void Monitor::updateXGeometry() const {
@@ -1740,17 +1730,17 @@ void clientmessage(XEvent* e) {
     if (!c)
         return;
 
-    if (cme->message_type == netatom[NetWMState]) {
+    if (cme->message_type == netatom->wmState) {
         if (static_cast<unsigned long>(cme->data.l[1]) ==
-                netatom[NetWMFullscreen] ||
+                netatom->wmFullscreen ||
             static_cast<unsigned long>(cme->data.l[2]) ==
-                netatom[NetWMFullscreen]) {
+                netatom->wmFullscreen) {
             c->setFullscreen((cme->data.l[0] == 1 /* _NET_WM_STATE_ADD    */
                               ||
                               (cme->data.l[0] == 2 /* _NET_WM_STATE_TOGGLE */ &&
                                !c->getFlags().isFullscreen)));
         }
-    } else if (cme->message_type == netatom[NetActiveWindow]) {
+    } else if (cme->message_type == netatom->activeWindow) {
         if (c != selmon->fSelected && !c->getFlags().isUrgent)
             c->setUrgent(true);
     }
@@ -2095,22 +2085,22 @@ void setup() {
     barHeight = drw->getPrimaryFontHeight() + 2;
     updateDisplayGeometry();
     /* init atoms */
-    Atom utf8string = XInternAtom(dpy, "UTF8_STRING", False);
+    XNetPropertyFactory net{dpy, root};
+    auto wmCheck = net.make<XProperty<XA_WINDOW>>("_NET_SUPPORTING_WM_CHECK");
+    netatom = std::make_unique<Net_Properties>(Net_Properties{
+        .activeWindow = net.makeManaged<XA_WINDOW>("_NET_ACTIVE_WINDOW"),
+        .clientList = net.makeManaged<XA_WINDOW>("_NET_CLIENT_LIST"),
+        .wmName = net.make<XProperty<XA_TEXT>>("_NET_WM_NAME"),
+        .wmState = net.make<XProperty<XA_ATOM>>("_NET_WM_STATE"),
+        .wmFullscreen = net.make<XSentinel>("_NET_WM_STATE_FULLSCREEN"),
+        .wmWindowType = net.make<XSentinel>("_NET_WM_WINDOW_TYPE"),
+        .wmWindowTypeDialog = net.make<XSentinel>("_NET_WM_WINDOW_TYPE_DIALOG"),
+    });
+
     wmatom[WMProtocols] = XInternAtom(dpy, "WM_PROTOCOLS", False);
     wmatom[WMDelete] = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
     wmatom[WMState] = XInternAtom(dpy, "WM_STATE", False);
     wmatom[WMTakeFocus] = XInternAtom(dpy, "WM_TAKE_FOCUS", False);
-    netatom[NetActiveWindow] = XInternAtom(dpy, "_NET_ACTIVE_WINDOW", False);
-    netatom[NetSupported] = XInternAtom(dpy, "_NET_SUPPORTED", False);
-    netatom[NetWMName] = XInternAtom(dpy, "_NET_WM_NAME", False);
-    netatom[NetWMState] = XInternAtom(dpy, "_NET_WM_STATE", False);
-    netatom[NetWMCheck] = XInternAtom(dpy, "_NET_SUPPORTING_WM_CHECK", False);
-    netatom[NetWMFullscreen] =
-        XInternAtom(dpy, "_NET_WM_STATE_FULLSCREEN", False);
-    netatom[NetWMWindowType] = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE", False);
-    netatom[NetWMWindowTypeDialog] =
-        XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DIALOG", False);
-    netatom[NetClientList] = XInternAtom(dpy, "_NET_CLIENT_LIST", False);
     /* init cursors */
     cursors.emplace(CursorTheme{
         .normal = {dpy, XC_left_ptr},
@@ -2124,16 +2114,11 @@ void setup() {
     updateStatusBarMessage();
     /* supporting window for NetWMCheck */
     wmcheckwin = XCreateSimpleWindow(dpy, root, 0, 0, 1, 1, 0, 0, 0);
-    XChangeProperty(dpy, wmcheckwin, netatom[NetWMCheck], XA_WINDOW, 32,
-                    PropModeReplace, (unsigned char*)&wmcheckwin, 1);
-    XChangeProperty(dpy, wmcheckwin, netatom[NetWMName], utf8string, 8,
-                    PropModeReplace, (unsigned char*)"dwm++", 3);
-    XChangeProperty(dpy, root, netatom[NetWMCheck], XA_WINDOW, 32,
-                    PropModeReplace, (unsigned char*)&wmcheckwin, 1);
-    /* EWMH support per view */
-    XChangeProperty(dpy, root, netatom[NetSupported], XA_ATOM, 32,
-                    PropModeReplace, (unsigned char*)netatom, NetLast);
-    XDeleteProperty(dpy, root, netatom[NetClientList]);
+    MutableXProperty<XA_WINDOW>{wmcheckwin, wmCheck}.overwrite({wmcheckwin});
+    MutableTextXProperty{wmcheckwin, netatom->wmName}.overwrite(dwmClassHint);
+    MutableXProperty<XA_WINDOW>{root, wmCheck}.overwrite({wmcheckwin});
+
+    netatom->clientList.erase();
     /* select events */
     XSetWindowAttributes wa;
     wa.cursor = cursors->normal.getXCursor();
@@ -2183,13 +2168,12 @@ void cleanup() {
     view(~0u);
     XUngrabKey(dpy, AnyKey, AnyModifier, root);
     allMonitors.clear();
-    XDeleteProperty(dpy, root, netatom[NetClientList]);
     XDestroyWindow(dpy, wmcheckwin);
     cursors.reset();
     delete drw; // TODO: this should be a unique pointer
     XSync(dpy, False);
     XSetInputFocus(dpy, PointerRoot, RevertToPointerRoot, CurrentTime);
-    XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
+    netatom.reset();
 }
 } // namespace
 
