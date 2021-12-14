@@ -74,23 +74,22 @@ std::string_view
 getContiguousCharactersWithRenderer(const DisplayFont* renderingFont,
                                     const std::vector<DisplayFont>& fonts,
                                     const std::string_view text) {
-
-    long utf8Codepoint;
     size_t utf8StringLength = 0;
-
     while (utf8StringLength < text.size()) {
+        long utf8Codepoint;
 
-        const auto utf8CharLength = utf8decode(
-            text.substr(utf8StringLength).data(), &utf8Codepoint, UTF_SIZ);
+        const auto suffix = text.substr(utf8StringLength);
+        const auto utf8CharLength =
+            utf8decode(suffix.data(), &utf8Codepoint, UTF_SIZ);
 
-        if (renderingFont != getFirstFontWithSymbol(fonts, utf8Codepoint)) {
+        if (renderingFont != getFirstFontWithSymbol(fonts, utf8Codepoint))
             break;
-        }
 
         utf8StringLength += utf8CharLength;
     }
 
-    return text.substr(0, utf8StringLength);
+    // Hack: from the original dwm -- always render a character
+    return text.substr(0, std::max(utf8StringLength, size_t{1}));
 }
 
 std::string_view cropTextToExtent(const DisplayFont& renderingFont,
@@ -121,9 +120,7 @@ CursorFont::~CursorFont() {
     }
 }
 
-Cursor CursorFont::getXCursor() const {
-    return *fCursor;
-}
+Cursor CursorFont::getXCursor() const { return *fCursor; }
 
 XColorScheme::XColorScheme(Display* display, const int screen,
                            const ColorScheme& scheme) {
@@ -207,15 +204,14 @@ bool DisplayFont::doesCodepointExistInFont(long utf8Codepoint) const {
     return XftCharExists(fDisplay, fXfont, utf8Codepoint);
 }
 
-DisplayFont
+std::optional<DisplayFont>
 DisplayFont::generateDerivedFontWithCodepoint(const int screen,
                                               const long utf8Codepoint) const {
     auto* fcCharSet = FcCharSetCreate();
     FcCharSetAddChar(fcCharSet, utf8Codepoint);
 
-    if (!fPattern) {
-        die("the first font in the cache must be loaded from a font string.");
-    }
+    if (!fPattern)
+        die("First font in the cache must be loaded from a font string.");
 
     auto* fcPattern = FcPatternDuplicate(fPattern);
     FcPatternAddCharSet(fcPattern, FC_CHARSET, fcCharSet);
@@ -231,16 +227,16 @@ DisplayFont::generateDerivedFontWithCodepoint(const int screen,
     FcCharSetDestroy(fcCharSet);
     FcPatternDestroy(fcPattern);
 
-    if (!match) {
-        die("TODO: figure out what should happen here");
+    if (!match)
+        die("Match fail: TODO: figure out what should happen here");
+
+    if (DisplayFont newFont{fDisplay, match};
+        newFont.doesCodepointExistInFont(utf8Codepoint)) {
+        return newFont;
     }
 
-    DisplayFont newFont{fDisplay, match};
-    if (!newFont.doesCodepointExistInFont(utf8Codepoint)) {
-        die("TODO: figure out what should happen here");
-    }
-
-    return newFont;
+    fprintf(stderr, "Codepoint doesn't exist: reverting to default font\n");
+    return std::nullopt;
 }
 
 uint DisplayFont::getHeight() const { return fXfont->ascent + fXfont->descent; }
@@ -353,9 +349,13 @@ int Drw::renderText(int x, const int y, uint w, uint h, const uint lpad,
         if (!renderingFont) {
             // Make a new font to render this character
             // NOTE: pointer into vector: don't mutate fFonts past this point
-            renderingFont =
-                &fFonts.emplace_back(fFonts[0].generateDerivedFontWithCodepoint(
-                    fScreen, utf8Codepoint));
+            auto newFont = fFonts[0].generateDerivedFontWithCodepoint(
+                fScreen, utf8Codepoint);
+            if (newFont) {
+                renderingFont = &fFonts.emplace_back(std::move(*newFont));
+            } else {
+                renderingFont = &(*fFonts.begin());
+            }
         }
 
         const auto textToRender =

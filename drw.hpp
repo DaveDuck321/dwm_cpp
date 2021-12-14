@@ -50,8 +50,8 @@ class DisplayFont {
 
     bool doesCodepointExistInFont(long utf8Codepoint) const;
 
-    DisplayFont generateDerivedFontWithCodepoint(int screen,
-                                                 long utf8Codepoint) const;
+    std::optional<DisplayFont>
+    generateDerivedFontWithCodepoint(int screen, long utf8Codepoint) const;
 
     uint getHeight() const;
     uint getTextExtent(std::string_view) const;
