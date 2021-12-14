@@ -1615,7 +1615,7 @@ void Monitor::toggleBarRendering() {
 }
 
 void Monitor::updateXClientList() const {
-    for (const auto& client : getTiledClients())
+    for (const auto& client : fClients)
         netatom->clientList.append(client->fWindow);
 }
 
@@ -1973,8 +1973,7 @@ void setmfact(const float factor) {
 }
 
 void spawn(const char* command[]) {
-    if (command == dmenucmd)
-        dmenumon[0] = '0' + selmon->getMonitorNumber();
+    spawnCommandMonitorID[0] = '0' + selmon->getMonitorNumber();
     if (fork() == 0) {
         if (dpy)
             close(ConnectionNumber(dpy));

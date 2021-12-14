@@ -68,8 +68,8 @@ const std::array<Layout, 3> layouts = {{
 #define SHCMD(cmd) { .v = (const char*[]){ "/bin/sh", "-c", cmd, NULL } }
 
 /* commands */
-char dmenumon[2] = "0"; /* component of dmenucmd, manipulated in spawn() */
-const char *dmenucmd[] = { "dmenu_run", "-m", dmenumon, "-fn", dmenufont, "-nb", col_gray1, "-nf", col_gray3, "-sb", col_cyan, "-sf", col_gray4, NULL };
+char spawnCommandMonitorID[2] = {'0', '\0'}; /* component of dmenucmd, manipulated in spawn() */
+const char *dmenucmd[] = { "dmenu_run", "-m", spawnCommandMonitorID, "-fn", dmenufont, "-nb", col_gray1, "-nf", col_gray3, "-sb", col_cyan, "-sf", col_gray4, NULL };
 const char *termcmd[]  = { "st", NULL };
 
 Key keys[] = {
