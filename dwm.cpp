@@ -116,6 +116,16 @@ struct Rule {
     int monitor;
 };
 
+struct CommandPtr {
+    const char* const* data;
+};
+
+template <typename... Args> struct Command {
+    Command(Args... args) : m_data{args..., nullptr} {}
+    operator CommandPtr() const { return {m_data.data()}; }
+    std::array<const char*, sizeof...(Args) + 1> m_data;
+};
+
 class Client {
     struct Flags {
         bool isFixed, isFloating, isUrgent, neverFocus, isFullscreen,
@@ -258,7 +268,7 @@ void resizemouse();
 void setgaps(const int inc);
 void setlayout(const Layout* layout);
 void setmfact(const float factor);
-void spawn(const char** command);
+void spawn(CommandPtr command);
 void tag(const uint tag);
 void tagmon(const int dir);
 void togglebar();
@@ -1972,14 +1982,14 @@ void setmfact(const float factor) {
         selmon->incrementMasterFactor(factor);
 }
 
-void spawn(const char* command[]) {
+void spawn(CommandPtr command) {
     spawnCommandMonitorID[0] = '0' + selmon->getMonitorNumber();
     if (fork() == 0) {
         if (dpy)
             close(ConnectionNumber(dpy));
         setsid();
-        execvp(command[0], const_cast<char* const*>(command));
-        fprintf(stderr, "dwm++: execvp %s", command[0]);
+        execvp(command.data[0], const_cast<char* const*>(command.data));
+        fprintf(stderr, "dwm++: execvp %s", command.data[0]);
         perror(" failed");
         exit(EXIT_SUCCESS);
     }

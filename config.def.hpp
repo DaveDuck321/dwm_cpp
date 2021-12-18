@@ -68,14 +68,15 @@ const std::array<Layout, 3> layouts = {{
 #define SHCMD(cmd) { .v = (const char*[]){ "/bin/sh", "-c", cmd, NULL } }
 
 /* commands */
-char spawnCommandMonitorID[2] = {'0', '\0'}; /* component of dmenucmd, manipulated in spawn() */
-const char *dmenucmd[] = { "dmenu_run", "-m", spawnCommandMonitorID, "-fn", dmenufont, "-nb", col_gray1, "-nf", col_gray3, "-sb", col_cyan, "-sf", col_gray4, NULL };
-const char *termcmd[]  = { "st", NULL };
+char spawnCommandMonitorID[2] = {'0', '\0'}; /* component of dmenurun, manipulated in spawn() */
+Command dmenurun = { "dmenu_run", "-m", spawnCommandMonitorID, "-fn", dmenufont, "-nb", col_gray1, "-nf", col_gray3, "-sb", col_cyan, "-sf", col_gray4 };
+Command terminal  = { "st" };
+
 
 Key keys[] = {
 	/* modifier                     key        function  */
-	{ MODKEY,                       XK_p,      []{spawn(dmenucmd);}},
-	{ MODKEY|ShiftMask,             XK_Return, []{spawn(termcmd);}},
+	{ MODKEY,                       XK_p,      []{spawn(dmenurun);}},
+	{ MODKEY|ShiftMask,             XK_Return, []{spawn(terminal);}},
 	{ MODKEY,                       XK_b,      togglebar},
 	{ MODKEY,                       XK_j,      []{focusstack(+1);}},
 	{ MODKEY,                       XK_k,      []{focusstack(-1);}},
@@ -119,7 +120,7 @@ const std::array<Button, 11> buttons = {{
 	{ ClkLtSymbol,          0,              Button1,        [](int){togglelayout();}},
 	{ ClkLtSymbol,          0,              Button3,        [](int){setlayout(&layouts[2]);}},
 	{ ClkWinTitle,          0,              Button2,        [](int){zoom();}},
-	{ ClkStatusText,        0,              Button2,        [](int){spawn(termcmd);}},
+	{ ClkStatusText,        0,              Button2,        [](int){spawn(terminal);}},
 	{ ClkClientWin,         MODKEY,         Button1,        [](int){movemouse();}},
 	{ ClkClientWin,         MODKEY,         Button2,        [](int){togglefloating();}},
 	{ ClkClientWin,         MODKEY,         Button3,        [](int){resizemouse();}},
