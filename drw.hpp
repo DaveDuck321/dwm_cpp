@@ -58,7 +58,7 @@ class DisplayFont {
     XftFont* getXFont() const;
 
   private:
-    void dieIfFontInvalid() const;
+    void dieIfFontIsColored() const;
 
     Display* fDisplay;
     XftFont* fXfont;

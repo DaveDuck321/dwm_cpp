@@ -82,14 +82,14 @@ getContiguousCharactersWithRenderer(const DisplayFont* renderingFont,
         const auto utf8CharLength =
             utf8decode(suffix.data(), &utf8Codepoint, UTF_SIZ);
 
-        if (renderingFont != getFirstFontWithSymbol(fonts, utf8Codepoint))
+        if (utf8StringLength > 0 &&
+            renderingFont != getFirstFontWithSymbol(fonts, utf8Codepoint)) {
             break;
+        }
 
         utf8StringLength += utf8CharLength;
     }
-
-    // Hack: from the original dwm -- always render a character
-    return text.substr(0, std::max(utf8StringLength, size_t{1}));
+    return text.substr(0, utf8StringLength);
 }
 
 std::string_view cropTextToExtent(const DisplayFont& renderingFont,
@@ -139,22 +139,7 @@ XColorScheme::XColorScheme(Display* display, const int screen,
     }
 }
 
-void DisplayFont::dieIfFontInvalid() const {
-    // This isn't the original behaviour, should just throw to prevent Font
-    // construction In DWM they just returned a null pointer instead
-
-    /* Using the pattern found at font->xfont->pattern does not yield the
-     * same substitution results as using the pattern returned by
-     * FcNameParse; using the latter results in the desired fallback
-     * behaviour whereas the former just results in missing-character
-     * rectangles being drawn, at least with some fonts. */
-    if (!fXfont) {
-        die("cannot load font from name:");
-    }
-    if (!fPattern) {
-        die("cannot parse font pattern:");
-    }
-
+void DisplayFont::dieIfFontIsColored() const {
     /* Do not allow using color fonts. This is a workaround for a BadLength
      * error from Xft with color glyphs. Modelled on the Xterm workaround. See
      * https://bugzilla.redhat.com/show_bug.cgi?id=1498269
@@ -171,9 +156,12 @@ void DisplayFont::dieIfFontInvalid() const {
 
 DisplayFont::DisplayFont(Display* display, FcPattern* pattern)
     : fDisplay{display}, fXfont{XftFontOpenPattern(display, pattern)},
-      fPattern{pattern} {
+      fPattern{nullptr} {
 
-    dieIfFontInvalid();
+    if (!fXfont)
+        die("error, cannot load font from pattern:");
+
+    dieIfFontIsColored();
 }
 
 DisplayFont::DisplayFont(Display* display, const int screen,
@@ -181,7 +169,17 @@ DisplayFont::DisplayFont(Display* display, const int screen,
     : fDisplay{display}, fXfont{XftFontOpenName(display, screen, fontname)},
       fPattern{FcNameParse((FcChar8*)fontname)} {
 
-    dieIfFontInvalid();
+    /* Using the pattern found at font->xfont->pattern does not yield the
+     * same substitution results as using the pattern returned by
+     * FcNameParse; using the latter results in the desired fallback
+     * behaviour whereas the former just results in missing-character
+     * rectangles being drawn, at least with some fonts. */
+    if (!fXfont)
+        die("cannot load font from name:");
+    if (!fPattern)
+        die("error, cannot parse font name to pattern:");
+
+    dieIfFontIsColored();
 }
 
 DisplayFont::DisplayFont(DisplayFont&& other)
@@ -348,7 +346,7 @@ int Drw::renderText(int x, const int y, uint w, uint h, const uint lpad,
 
         if (!renderingFont) {
             // Make a new font to render this character
-            // NOTE: pointer into vector: don't mutate fFonts past this point
+            // NOTE: don't mutate fFonts past this point
             auto newFont = fFonts[0].generateDerivedFontWithCodepoint(
                 fScreen, utf8Codepoint);
             if (newFont) {
@@ -366,7 +364,7 @@ int Drw::renderText(int x, const int y, uint w, uint h, const uint lpad,
             cropTextToExtent(*renderingFont, textToRender, w);
 
         if (!croppedTextToRender.empty()) {
-            // TODO: render elipsis here if textToRender != croppedTextToRender
+            // TODO: render elipsis if textToRender != croppedTextToRender
 
             if (shouldRender) {
                 const auto ty = y + (h - renderingFont->getHeight()) / 2 +
