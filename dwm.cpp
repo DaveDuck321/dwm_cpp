@@ -382,13 +382,16 @@ long getXStateProperty(Window window) {
 }
 
 Atom getXAtomProperty(Window window, Atom prop) {
-    int di;
-    unsigned long dl;
+    int actualFormatReturn;
+    unsigned long nitemsReturn, bytesAfterReturn;
     unsigned char* outProperty = nullptr;
-    Atom da = None;
+    Atom actualTypeReturn = None;
     if (XGetWindowProperty(dpy, window, prop, 0L, sizeof(prop), False, XA_ATOM,
-                           &da, &di, &dl, &dl, &outProperty) == Success &&
-        outProperty) {
+                           &actualTypeReturn, &actualFormatReturn,
+                           &nitemsReturn, &bytesAfterReturn,
+                           &outProperty) == Success &&
+        outProperty && nitemsReturn != 0) {
+
         const auto atom = *(Atom*)outProperty;
         XFree(outProperty);
         return atom;
