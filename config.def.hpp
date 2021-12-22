@@ -72,6 +72,7 @@ char spawnCommandMonitorID[2] = {'0', '\0'}; /* component of dmenurun, manipulat
 Command dmenurun = { "dmenu_run", "-m", spawnCommandMonitorID, "-fn", dmenufont, "-nb", col_gray1, "-nf", col_gray3, "-sb", col_cyan, "-sf", col_gray4 };
 Command terminal  = { "st" };
 
+void autostart() { spawn(terminal); }
 
 Key keys[] = {
 	/* modifier                     key        function  */

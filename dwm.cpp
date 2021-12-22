@@ -254,6 +254,7 @@ class Monitor {
 };
 
 /* function declarations */
+void autostart();
 void handleXEvent(XEvent* event);
 void monocle(Monitor*);
 void tile(Monitor*);
@@ -2146,6 +2147,7 @@ void setup() {
 void run() {
     XEvent ev;
     XSync(dpy, False);
+    autostart();
     while (running && !XNextEvent(dpy, &ev))
         handleXEvent(&ev); /* TODO: Ignore unhandled events */
 }
