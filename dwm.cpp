@@ -1982,7 +1982,7 @@ void setlayout(const Layout* layout) {
 }
 
 void setmfact(const float factor) {
-    if (!selmon->getActiveLayout()->arrange)
+    if (selmon->getActiveLayout()->arrange)
         selmon->incrementMasterFactor(factor);
 }
 
